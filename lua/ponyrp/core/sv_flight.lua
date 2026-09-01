@@ -85,19 +85,32 @@ function Flight.Stop(ply, reason)
     hook.Run("PonyRP_FlightChanged", ply, false, reason)
 end
 
--- Double-tapped Space, midair. Requiring midair means a standing start
--- already costs a jump, which is the only brake on takeoff until playtest
--- says whether it needs a real one.
-hook.Add("KeyPress", "PonyRP.Flight.Takeoff", function(ply, key)
+--[[
+Double-tapped Space, both ways: midair it takes off, and in flight it drops
+you again. Requiring midair to start means a standing start already costs a
+jump, which is the only brake on takeoff until playtest says whether it needs
+a real one.
+
+Holding Space to climb is one KeyPress, not a stream of them, so cruising
+upward cannot land you by accident -- it takes two deliberate taps.
+]]
+hook.Add("KeyPress", "PonyRP.Flight.Toggle", function(ply, key)
     if key ~= IN_JUMP then return end
-    if Flight.IsFlying(ply) then return end
-    if ply:OnGround() or not Flight.CanFly(ply) then return end
+
+    local flying = Flight.IsFlying(ply)
+
+    if not flying and (ply:OnGround() or not Flight.CanFly(ply)) then return end
 
     local last = ply.ponyrpFlightLastJump or 0
 
     if CurTime() - last <= Flight.DOUBLE_TAP then
         ply.ponyrpFlightLastJump = 0
-        Flight.Start(ply)
+
+        if flying then
+            Flight.Stop(ply, "toggled")
+        else
+            Flight.Start(ply)
+        end
     else
         ply.ponyrpFlightLastJump = CurTime()
     end

@@ -96,16 +96,36 @@ SelectWingsType actually reads, and the two networked bools do not
 necessarily land on the same frame. Watching the wrong one would refresh the
 bodygroup before PPM2 could see the flag and leave the wings shut.
 ]]
-local function refreshWings(ply)
-    if not isfunction(ply.GetPonyData) then return end
+local function applyBodygroups(ply)
+    if not IsValid(ply) or not isfunction(ply.GetPonyData) then return end
 
     local ok, data = pcall(ply.GetPonyData, ply)
     if not ok or not data or not isfunction(data.GetBodygroupController) then return end
 
     local controller = data:GetBodygroupController()
-    if not controller or not isfunction(controller.ApplyRace) then return end
+    if not controller then return end
 
-    pcall(controller.ApplyRace, controller)
+    -- ApplyRace alone sets the bodygroup on the player entity. PPM2's own
+    -- data-change path calls ApplyBodygroups (data_instance.moon:309), which
+    -- is the one that also reaches the merged models -- and those are what
+    -- kept showing spread wings after landing. Call both, race last, so the
+    -- wing selection is the final word.
+    if isfunction(controller.ApplyBodygroups) then
+        pcall(controller.ApplyBodygroups, controller)
+    end
+
+    if isfunction(controller.ApplyRace) then
+        pcall(controller.ApplyRace, controller)
+    end
+end
+
+local function refreshWings(ply)
+    applyBodygroups(ply)
+
+    -- Re-assert next tick. PPM2 rebuilds bodygroups on its own schedule, and
+    -- a rebuild landing in the same frame as ours would otherwise restore
+    -- the state we just cleared.
+    timer.Simple(0, function() applyBodygroups(ply) end)
 end
 
 local function updateLean(ply)
