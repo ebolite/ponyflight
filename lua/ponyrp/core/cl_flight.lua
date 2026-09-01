@@ -96,27 +96,27 @@ SelectWingsType actually reads, and the two networked bools do not
 necessarily land on the same frame. Watching the wrong one would refresh the
 bodygroup before PPM2 could see the flag and leave the wings shut.
 ]]
+--[[
+Exactly what PPM2's own timer calls, and for a reason.
+
+PPM2 refreshes bodygroups on a 0.5s client timer (common/hooks.moon:84),
+which invokes data:SlowUpdate(). That timer was what actually opened and
+closed the wings -- roughly a second late -- which means our own calls were
+not landing at all. They were wrapped in pcall, so a failure was silent and
+looked exactly like a call that had worked.
+
+Calling the same entry point as the working timer removes the guesswork, and
+the pcall goes with it: PPM2 runs this under xpcall itself, so it is a call
+they expect to survive, and a real error is worth seeing rather than hiding
+behind a one-second delay.
+]]
 local function applyBodygroups(ply)
     if not IsValid(ply) or not isfunction(ply.GetPonyData) then return end
 
-    local ok, data = pcall(ply.GetPonyData, ply)
-    if not ok or not data or not isfunction(data.GetBodygroupController) then return end
+    local data = ply:GetPonyData()
+    if not data or not isfunction(data.SlowUpdate) then return end
 
-    local controller = data:GetBodygroupController()
-    if not controller then return end
-
-    -- ApplyRace alone sets the bodygroup on the player entity. PPM2's own
-    -- data-change path calls ApplyBodygroups (data_instance.moon:309), which
-    -- is the one that also reaches the merged models -- and those are what
-    -- kept showing spread wings after landing. Call both, race last, so the
-    -- wing selection is the final word.
-    if isfunction(controller.ApplyBodygroups) then
-        pcall(controller.ApplyBodygroups, controller)
-    end
-
-    if isfunction(controller.ApplyRace) then
-        pcall(controller.ApplyRace, controller)
-    end
+    data:SlowUpdate()
 end
 
 --[[
