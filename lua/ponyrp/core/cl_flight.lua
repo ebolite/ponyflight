@@ -97,26 +97,31 @@ necessarily land on the same frame. Watching the wrong one would refresh the
 bodygroup before PPM2 could see the flag and leave the wings shut.
 ]]
 --[[
-Exactly what PPM2's own timer calls, and for a reason.
+ApplyBodygroups, not SlowUpdate, and the difference is the reset.
 
-PPM2 refreshes bodygroups on a 0.5s client timer (common/hooks.moon:84),
-which invokes data:SlowUpdate(). That timer was what actually opened and
-closed the wings -- roughly a second late -- which means our own calls were
-not landing at all. They were wrapped in pcall, so a failure was silent and
-looked exactly like a call that had worked.
+Briefly this called data:SlowUpdate() -- the same entry point PPM2's own
+0.5s timer uses -- on the theory that copying the working timer removed the
+guesswork. It made things worse, and the diff says why:
 
-Calling the same entry point as the working timer removes the guesswork, and
-the pcall goes with it: PPM2 runs this under xpcall itself, so it is a call
-they expect to survive, and a real error is worth seeing rather than hiding
-behind a one-second delay.
+    ApplyBodygroups = ResetBodygroups() then SlowUpdate()
+    SlowUpdate      = SlowUpdate()
+
+ResetBodygroups zeroes every bodygroup and calls ResetWings
+(bodygroup_controller.moon:740-752). On the new pony model the wings are not
+only a bodygroup, so ApplyRace setting BODYGROUP_WINGS is not by itself
+enough to put them away -- the reset is what actually clears them. Dropping
+it left nothing to undo the spread wings.
 ]]
 local function applyBodygroups(ply)
     if not IsValid(ply) or not isfunction(ply.GetPonyData) then return end
 
     local data = ply:GetPonyData()
-    if not data or not isfunction(data.SlowUpdate) then return end
+    if not data or not isfunction(data.GetBodygroupController) then return end
 
-    data:SlowUpdate()
+    local controller = data:GetBodygroupController()
+    if not controller or not isfunction(controller.ApplyBodygroups) then return end
+
+    controller:ApplyBodygroups()
 end
 
 --[[
