@@ -114,22 +114,89 @@ local function leanFor(ply)
     return state
 end
 
-hook.Add("PrePlayerDraw", "PonyRP.Flight.Lean", function(ply)
+--[[
+Applying the lean.
+
+The body is NOT moved by SetRenderAngles. PPM2 poses the pony through
+ManipulateBoneAngles every frame in its own PrePlayerDraw
+(render.moon:275), and the engine overwrites a player's render angles
+regardless. Setting them only moved the pieces PPM2 positions itself by
+reading the stored value back -- which is exactly why the cutie mark
+banked and the pony did not.
+
+So we rotate bone 0 instead, which PPM2's own bones_modifier.moon
+documents as LrigPelvis, the root. PPM2 calls PPM2.SetupBones between
+ResetBones and its own Think, specifically so other addons can pose the
+pony; that is the sanctioned seam and it is the one we use.
+
+ManipulateBoneAngles takes an offset in the bone's local space, so a
+world-space lean has to be conjugated into it: with M the bone's world
+rotation and R the lean we want in world space, the local offset is
+M^-1 * R * M. Deriving it beats guessing which way round the rig's
+local axes point.
+]]
+
+-- The cutie mark and PPM2's other separately-placed models follow render
+-- angles, which is why they leaned when nothing else did. Keeping both in
+-- sync is the point, so we still set them. If the mark now banks TWICE as
+-- far as the body it is being carried by the bones as well -- set this
+-- false and it will be driven by the body alone.
+local RENDER_ANGLES_MOVE_ATTACHMENTS = true
+
+local function applyLean(ply, state)
+    local matrix = ply:GetBoneMatrix(0)
+    if not matrix then return end
+
+    -- The lean we want, in world space: pitch about the pony's own right
+    -- axis, roll about its forward axis.
+    local facing = Angle(0, ply:EyeAngles().y, 0)
+    local world = Angle(0, 0, 0)
+    world:RotateAroundAxis(facing:Forward(), state.roll)
+    world:RotateAroundAxis(facing:Right(), state.pitch)
+
+    local boneWorld = Matrix()
+    boneWorld:SetAngles(matrix:GetAngles())
+
+    local inverse = Matrix(boneWorld)
+    inverse:Invert()
+
+    local desired = Matrix()
+    desired:SetAngles(world)
+
+    ply:ManipulateBoneAngles(0, (inverse * desired * boneWorld):GetAngles())
+end
+
+hook.Add("PPM2.SetupBones", "PonyRP.Flight.Lean", function(ply)
+    if not IsValid(ply) or not ply:IsPlayer() then return end
+
     if not Flight.IsFlying(ply) then
-        lean[ply] = nil
+        -- PPM2's ResetBones already cleared it this frame; this only matters
+        -- for the frame flight ends on, and costs nothing.
+        if lean[ply] then
+            lean[ply] = nil
+            ply:ManipulateBoneAngles(0, angle_zero)
+        end
         return
     end
 
-    local state = leanFor(ply)
-    local angles = ply:GetRenderAngles()
+    applyLean(ply, leanFor(ply))
+end)
 
+hook.Add("PrePlayerDraw", "PonyRP.Flight.LeanAttachments", function(ply)
+    if not RENDER_ANGLES_MOVE_ATTACHMENTS then return end
+    if not Flight.IsFlying(ply) then return end
+
+    local state = lean[ply]
+    if not state then return end
+
+    local angles = ply:GetRenderAngles()
     ply.ponyrpFlightRenderAngles = angles
     ply:SetRenderAngles(Angle(state.pitch, angles.y, state.roll))
 end)
 
 hook.Add("PostPlayerDraw", "PonyRP.Flight.LeanReset", function(ply)
-    -- Render angles persist, so leaving them set would tilt the pony in
-    -- every later pass this frame -- reflections and RT cameras included.
+    -- Render angles persist, so leaving them set would tilt whatever does
+    -- follow them in every later pass this frame -- reflections included.
     if ply.ponyrpFlightRenderAngles then
         ply:SetRenderAngles(ply.ponyrpFlightRenderAngles)
         ply.ponyrpFlightRenderAngles = nil

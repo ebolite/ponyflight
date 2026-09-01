@@ -154,13 +154,13 @@ hook.Add("FinishMove", "PonyRP.Flight.Upkeep", function(ply, mv)
     if CurTime() >= (ply.ponyrpFlightNextBeat or 0) then
         local climbing = mv:KeyDown(IN_JUMP)
         local effort = climbing and 1 or math.Clamp(speed / (Flight.SPEED * 1.2), 0, 1)
-        local interval = Lerp(effort, 0.85, 0.34)
+        local interval = Lerp(effort, 1.7, 0.68)
 
         ply:EmitSound(
             Flight.WINGBEATS[math.random(#Flight.WINGBEATS)],
             70,
             math.random(94, 106),
-            climbing and 0.5 or 0.36,
+            climbing and 0.375 or 0.27,
             CHAN_BODY)
 
         ply.ponyrpFlightNextBeat = CurTime() + interval * math.Rand(0.92, 1.08)
