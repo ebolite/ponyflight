@@ -229,14 +229,16 @@ local function wingsWanted(ply)
 
     if ply ~= LocalPlayer() or not predictedAt then return base end
 
-    -- Server agrees: the prediction has done its job and is retired.
-    if predictedFlying == base then
+    -- Retiring the prediction resets the guess to reality as well as clearing
+    -- the window. Leaving predictedFlying latched at its last value is what
+    -- made a second takeoff slow: the KeyPress guard below reads it, so a
+    -- flight that ended by any route other than the ground edge -- death,
+    -- gib, vehicle, race change -- left it stuck true and silently declined
+    -- to predict ever again. That is a delay only the flier can see, because
+    -- only the flier has a prediction to lose.
+    if predictedFlying == base or CurTime() - predictedAt >= PREDICTION_TIMEOUT then
         predictedAt = nil
-        return base
-    end
-
-    if CurTime() - predictedAt >= PREDICTION_TIMEOUT then
-        predictedAt = nil
+        predictedFlying = base
         return base
     end
 
@@ -260,12 +262,14 @@ local function enforceWings(ply)
     local wanted = wingsWanted(ply)
 
     if ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) == wanted and wingState[ply] == wanted then
-        return
+        return wanted
     end
 
     ply:SetNW2Bool(Flight.PPM2_NW_VAR, wanted)
     wingState[ply] = wanted
     refreshWings(ply)
+
+    return wanted
 end
 
 -- The same double tap sv_flight.lua's KeyPress hook watches, on the same
@@ -276,7 +280,9 @@ local lastJump = 0
 hook.Add("KeyPress", "PonyRP.Flight.PredictTakeoff", function(ply, key)
     if ply ~= LocalPlayer() then return end
     if key ~= IN_JUMP then return end
-    if Flight.IsFlying(ply) or predictedFlying then return end
+    -- Only an ACTIVE prediction blocks a new one. Testing predictedFlying on
+    -- its own tested a stale guess and refused to predict at all.
+    if Flight.IsFlying(ply) or (predictedAt and predictedFlying) then return end
     if ply:OnGround() or not Flight.CanFly(ply) then return end
 
     if CurTime() - lastJump <= Flight.DOUBLE_TAP then
@@ -353,11 +359,6 @@ hook.Add("Think", "PonyRP.Flight.Presentation", function()
     if IsValid(localPly) then
         local flying = Flight.IsFlying(localPly)
 
-        if flying ~= wasFlying then
-            wasFlying = flying
-            setThirdPerson(flying)
-        end
-
         -- Landing is the server's own exit test -- sv_flight.lua's FinishMove
         -- stops flight on OnGround and nothing else -- and OnGround for
         -- yourself is predicted, so the client reaches that answer at the same
@@ -366,19 +367,43 @@ hook.Add("Think", "PonyRP.Flight.Presentation", function()
         -- On the edge, like PlayerNoClip, not on the condition. Landing is one
         -- moment; predicting it again every frame we remain stood there would
         -- keep re-arming the window against a server that has not agreed yet.
+        --
+        -- Resolved before the camera below, so the camera acts on this frame's
+        -- prediction rather than last frame's.
         local onGround = localPly:OnGround()
 
-        if onGround and not wasOnGround and (flying or predictedFlying) then
+        if onGround and not wasOnGround and (flying or (predictedAt and predictedFlying)) then
             predictFlying(false)
         end
 
         wasOnGround = onGround
+
+        --[[
+        The camera swings on the predicted state, not the server's.
+
+        This is the other half of a delay only the flier sees, and the larger
+        half: in first person there are no wings on screen to be quick about.
+        Whatever the bodygroup does, you cannot see your own pony until the
+        third person camera has pulled out, so gating that on the un-predicted
+        ponyrp_flying spent the whole round trip before the flight became
+        visible at all -- while everypony else, already looking at you, saw
+        the wings open immediately.
+
+        Predicting the wings and not the camera meant the one pony who could
+        not benefit from the prediction was the one it was for.
+        ]]
+        local shown = wingsWanted(localPly)
+
+        if shown ~= wasFlying then
+            wasFlying = shown
+            setThirdPerson(shown)
+        end
     end
 
     for _, ply in ipairs(player.GetAll()) do
-        enforceWings(ply)
-
-        if Flight.IsFlying(ply) then
+        -- Lean off the same answer the wings use, so the body banks on the
+        -- prediction too rather than a round trip behind its own wings.
+        if enforceWings(ply) then
             local state = updateLean(ply)
 
             if RENDER_ANGLES_MOVE_ATTACHMENTS then
