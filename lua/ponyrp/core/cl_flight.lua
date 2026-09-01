@@ -41,12 +41,22 @@ local ROLL_GAIN = 1.6
 local FORWARD_LEAN = 7      -- nose dips into forward travel, lifts going backwards
 local LEAN_RESPONSE = 6     -- exponential approach per second
 
--- The cutie mark and PPM2's other separately-placed models follow render
--- angles, which is why they leaned when nothing else did. Keeping both in
--- sync is the point, so we still set them. If the mark banks TWICE as far as
--- the body it is being carried by the bones too -- set this false and the
--- body alone will drive it.
-local RENDER_ANGLES_MOVE_ATTACHMENTS = true
+--[[
+Off, and this is the answer to why the mark drifted out of sync.
+
+Setting render angles moved PPM2's attached pieces back when nothing else
+was leaning, which read as "render angles are how you move the mark". They
+are not: those pieces are bonemerged, so they already inherit the bone lean,
+and a bonemerged child also picks up the parent's render matrix. Writing
+both rotated them twice, about two different pivots -- the entity origin and
+the pelvis -- so they diverged from the body instead of matching it. Only
+the body itself ignored the render angles, which is what made the earlier
+symptom look the opposite way round.
+
+The bones drive everything. Left as a named constant because it is the one
+knob worth reaching for if attachments ever stop tracking again.
+]]
+local RENDER_ANGLES_MOVE_ATTACHMENTS = false
 
 local lean = {}
 local wingState = {}
