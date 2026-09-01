@@ -62,6 +62,15 @@ local lean = {}
 local wingState = {}
 local weTurnedItOn = false
 
+local function bodygroupController(ply)
+    if not IsValid(ply) or not isfunction(ply.GetPonyData) then return nil end
+
+    local data = ply:GetPonyData()
+    if not data or not isfunction(data.GetBodygroupController) then return nil end
+
+    return data:GetBodygroupController()
+end
+
 --[[
 Third person. Simple ThirdPerson (207948202) owns the camera; we only flip
 its convar, so the player keeps their own distance, offsets and smoothing
@@ -117,15 +126,33 @@ enough to put them away -- the reset is what actually clears them. Dropping
 it left nothing to undo the spread wings.
 ]]
 local function applyBodygroups(ply)
-    if not IsValid(ply) or not isfunction(ply.GetPonyData) then return end
-
-    local data = ply:GetPonyData()
-    if not data or not isfunction(data.GetBodygroupController) then return end
-
-    local controller = data:GetBodygroupController()
+    local controller = bodygroupController(ply)
     if not controller or not isfunction(controller.ApplyBodygroups) then return end
 
     controller:ApplyBodygroups()
+end
+
+-- Player bodygroups are server-networked. A clientside ApplyBodygroups can
+-- therefore be correct here and still be replaced by the next snapshot of
+-- the server's older value. Put back only the wing group immediately before
+-- drawing; this is cheap enough to be a condition rather than another
+-- cached event, and leaves every unrelated PPM/2 bodygroup alone.
+local function applyVisibleWings(ply)
+    if not Flight.CanFly(ply) then return end
+
+    local controller = bodygroupController(ply)
+    if not controller or not isfunction(controller.SelectWingsType) then return end
+
+    -- BODYGROUP_WINGS is controller-specific: 2 on the new model, 3 on the
+    -- old one. PPM2.BODYGROUP_WINGS is only the old-model default.
+    local class = controller.__class
+    local group = tonumber(class and class.BODYGROUP_WINGS or controller.BODYGROUP_WINGS)
+    if not group or group < 0 then return end
+
+    local wanted = tonumber(controller:SelectWingsType())
+    if not wanted or ply:GetBodygroup(group) == wanted then return end
+
+    ply:SetBodygroup(group, wanted)
 end
 
 --[[
@@ -432,6 +459,11 @@ happen to point.
 ]]
 hook.Add("PPM2.SetupBones", "PonyRP.Flight.Lean", function(ply)
     if not IsValid(ply) or not ply:IsPlayer() then return end
+
+    -- PPM2 calls SetupBones from its PrePlayerDraw, after ordinary entity
+    -- networking has had its chance to restore the server's stale bodygroup.
+    -- Correcting here makes the predicted value the one this render uses.
+    applyVisibleWings(ply)
 
     local state = lean[ply]
     if not state then return end

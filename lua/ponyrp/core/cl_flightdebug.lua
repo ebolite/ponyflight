@@ -58,9 +58,16 @@ local function expectedWings(ply)
 end
 
 local function actualWings(ply)
-    if not PPM2 or not isnumber(PPM2.BODYGROUP_WINGS) then return -1 end
+    local controller = controllerFor(ply)
+    if not controller then return -1 end
 
-    local ok, value = pcall(ply.GetBodygroup, ply, PPM2.BODYGROUP_WINGS)
+    -- PPM2.BODYGROUP_WINGS is the old-model default (3). The new pony
+    -- controller uses 2, so reading the global reports an unrelated group.
+    local class = controller.__class
+    local group = tonumber(class and class.BODYGROUP_WINGS or controller.BODYGROUP_WINGS)
+    if not group or group < 0 then return -1 end
+
+    local ok, value = pcall(ply.GetBodygroup, ply, group)
     return ok and tonumber(value) or -1
 end
 
