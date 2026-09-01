@@ -91,10 +91,14 @@ when ppm2_fly changes -- so the spread wings appeared only when something
 unrelated happened to refresh the bodygroups, which is the "sometimes" here.
 We call it ourselves.
 
-Keyed on ppm2_fly rather than our own ponyrp_flying: ppm2_fly is the value
-SelectWingsType actually reads, and the two networked bools do not
-necessarily land on the same frame. Watching the wrong one would refresh the
-bodygroup before PPM2 could see the flag and leave the wings shut.
+The two bools have opposite jobs, and it took a round of getting this wrong
+to see it. ppm2_fly is what SelectWingsType reads, so it is what we WRITE.
+ponyrp_flying is what we DERIVE FROM: the server owns it, PPM/2 has never
+heard of it, and so nothing but us ever writes it.
+
+Watching ppm2_fly instead -- which this did -- means watching a value four
+other things also set, and treating each of their writes as news about
+whether a pony is flying. It is not. See wingsWanted below.
 ]]
 --[[
 ApplyBodygroups, not SlowUpdate, and the difference is the reset.
@@ -161,10 +165,10 @@ It refreshes on the transition rather than waiting for its own timer --
 MOVETYPE_NOCLIP, which the local player's own prediction has already changed.
 Nothing is waited on because nothing had to travel.
 
-We had the first half already: the watcher below sees ppm2_fly change and
-refreshes the same frame. But ppm2_fly is set by the server, so no amount of
-refreshing beats the round trip -- refreshing sooner only recomputes from a
-flag that has not arrived, and SelectWingsType reads it as still false.
+We had the first half already, and it was never the problem. ppm2_fly is set
+by the server, so no amount of refreshing beats the round trip -- refreshing
+sooner only recomputes from a flag that has not arrived, and SelectWingsType
+reads it as still false.
 
 So the flag is written locally the moment the client can know, and the server
 is left to confirm. Both edges are honestly predictable from what the client
@@ -182,50 +186,85 @@ local predictedAt = nil
 local predictedFlying = false
 
 local function predictFlying(flying)
-    local ply = LocalPlayer()
-    if not IsValid(ply) then return end
-    if predictedFlying == flying and predictedAt then return end
+    if not IsValid(LocalPlayer()) then return end
+
+    -- Already predicting this, so leave the window where it was. Re-arming
+    -- it every frame would hold it open forever and let a guess outlast the
+    -- server, which is the one thing a prediction must never do.
+    if predictedAt and predictedFlying == flying then return end
 
     predictedAt = CurTime()
     predictedFlying = flying
-
-    -- PPM/2's own flag, written clientside. A local write to an NW2 var lives
-    -- until the server sends that var again, which is exactly the reconcile
-    -- we want: the authoritative value lands a round trip later and agrees.
-    ply:SetNW2Bool(Flight.PPM2_NW_VAR, flying)
-
-    wingState[ply] = flying
-    refreshWings(ply)
 end
 
 --[[
-Give the prediction back if the server never agrees.
+What the wings SHOULD be, recomputed from scratch every frame.
 
-Reconciled against ponyrp_flying rather than ppm2_fly, because ppm2_fly is
-the var we just overwrote and cannot be trusted to disagree with us. The
-server's refusals are all conditions the client cannot see -- a race change
-mid-jump, a vehicle, the cooldown -- and in that case it never sends ppm2_fly
-at all, since from its side nothing changed. Nothing would ever put the wings
-back. So the timeout is not belt and braces; it is the only correction there is.
+This is the part that was not matching noclip, and the part that was
+sticking. MOVETYPE_NOCLIP is not an event PPM/2 records; it is a condition
+that stays true, so every ApplyRace re-derives the answer and nothing can
+leave the wings wrong -- there is no stored state to go stale.
+
+Ours stored state. predictFlying wrote ppm2_fly once and trusted it to
+survive, and it does not, because PPM/2 writes that var clientside itself:
+
+    ModelChanges   ponydata.moon:500
+    PlayerRespawn  ponydata.moon:561
+    PlayerDeath    ponydata.moon:590     -- all @ent\SetNW2Bool('ppm2_fly', false)
+
+Every one of those shuts the wings mid-flight, and since the SERVER's copy
+never changed, it never re-sends and nothing ever puts them back. Stuck
+closed. The old reconcile could do the same in reverse -- on a slow landing
+confirmation it flipped its own guess back and wrote a stale true that the
+server would likewise never contradict. Stuck open on landing.
+
+So nothing is stored now. ponyrp_flying is the base -- it is ours, the server
+owns it, and PPM/2 has never heard of it, so nothing else writes it. The
+prediction is a bounded override on top, live only until the server catches
+up or the window lapses, so it can never outlive its usefulness or win an
+argument against the server.
 ]]
-local function reconcilePrediction()
-    if not predictedAt then return end
+local function wingsWanted(ply)
+    local base = Flight.IsFlying(ply)
 
-    local ply = LocalPlayer()
-    if not IsValid(ply) then return end
+    if ply ~= LocalPlayer() or not predictedAt then return base end
 
-    if Flight.IsFlying(ply) == predictedFlying then
+    -- Server agrees: the prediction has done its job and is retired.
+    if predictedFlying == base then
         predictedAt = nil
+        return base
+    end
+
+    if CurTime() - predictedAt >= PREDICTION_TIMEOUT then
+        predictedAt = nil
+        return base
+    end
+
+    return predictedFlying
+end
+
+--[[
+Assert it, every frame, for every pony.
+
+Cheap -- a bool compare per player, and the write and rebuild only happen on
+the frames where something has actually knocked the value off. That makes the
+correction self-healing rather than one-shot: whatever clobbers ppm2_fly, and
+there are at least four things that do, it is right again the next frame
+instead of until the next time the server happens to change its mind.
+
+This is what carries other ponies too. Their base is the networked
+ponyrp_flying, so PPM/2 zeroing ppm2_fly under a flying pegasus across the
+map now heals in a frame, where before it was permanent for them as well.
+]]
+local function enforceWings(ply)
+    local wanted = wingsWanted(ply)
+
+    if ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) == wanted and wingState[ply] == wanted then
         return
     end
 
-    if CurTime() - predictedAt < PREDICTION_TIMEOUT then return end
-
-    predictedAt = nil
-    predictedFlying = not predictedFlying
-
-    ply:SetNW2Bool(Flight.PPM2_NW_VAR, predictedFlying)
-    wingState[ply] = predictedFlying
+    ply:SetNW2Bool(Flight.PPM2_NW_VAR, wanted)
+    wingState[ply] = wanted
     refreshWings(ply)
 end
 
@@ -306,6 +345,7 @@ local function clearLean(ply)
 end
 
 local wasFlying = false
+local wasOnGround = false
 
 hook.Add("Think", "PonyRP.Flight.Presentation", function()
     local localPly = LocalPlayer()
@@ -322,22 +362,21 @@ hook.Add("Think", "PonyRP.Flight.Presentation", function()
         -- stops flight on OnGround and nothing else -- and OnGround for
         -- yourself is predicted, so the client reaches that answer at the same
         -- instant rather than being told about it a round trip later.
-        if (flying or predictedFlying) and localPly:OnGround() then
+        --
+        -- On the edge, like PlayerNoClip, not on the condition. Landing is one
+        -- moment; predicting it again every frame we remain stood there would
+        -- keep re-arming the window against a server that has not agreed yet.
+        local onGround = localPly:OnGround()
+
+        if onGround and not wasOnGround and (flying or predictedFlying) then
             predictFlying(false)
         end
 
-        reconcilePrediction()
+        wasOnGround = onGround
     end
 
     for _, ply in ipairs(player.GetAll()) do
-        -- Wings key off PPM2's own flag, watched directly so a refresh can
-        -- never run before PPM2 has the value.
-        local ppm2Flying = ply:GetNW2Bool(Flight.PPM2_NW_VAR, false)
-
-        if wingState[ply] ~= ppm2Flying then
-            wingState[ply] = ppm2Flying
-            refreshWings(ply)
-        end
+        enforceWings(ply)
 
         if Flight.IsFlying(ply) then
             local state = updateLean(ply)
