@@ -460,3 +460,14 @@ hook.Add("EntityRemoved", "PonyRP.Flight.Cleanup", function(ent)
     lean[ent] = nil
     wingState[ent] = nil
 end)
+
+-- Exposed for cl_flightdebug.lua. The prediction is two file-locals, and the
+-- one question worth asking is whether they are live at the moment the wings
+-- are wrong -- which is not answerable from outside without this.
+function Flight.DebugPrediction()
+    return predictedAt, predictedFlying
+end
+
+function Flight.DebugWingsWanted(ply)
+    return wingsWanted(ply)
+end
