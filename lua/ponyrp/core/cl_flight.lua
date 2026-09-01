@@ -132,12 +132,11 @@ merged models on its own schedule, so a single call can be undone moments
 later by a rebuild that was already in flight. Re-applying over ~0.3s means
 whichever pass lands, ours is the one after it.
 
-This cannot remove the first part of the delay: flight state is server
-authoritative, so the ppm2_fly flag costs a network round trip before the
-client can act on it at all. Killing that too would mean predicting takeoff
-on the client and setting the wing bodygroup directly, which duplicates
-PPM2's own wing-type arithmetic -- worth doing only if the remaining lag is
-still objectionable.
+This does not address the round trip -- refreshing sooner cannot help when
+the flag being refreshed from has not arrived. That is the prediction below,
+which writes the flag locally so there is something true to refresh from.
+The two are complementary: prediction decides WHEN the wings should change,
+this decides that our answer is the one that survives PPM2's own rebuilds.
 ]]
 local REASSERT_AT = { 0, 0.05, 0.15, 0.3 }
 
@@ -148,6 +147,106 @@ local function refreshWings(ply)
         timer.Simple(delay, function() applyBodygroups(ply) end)
     end
 end
+
+--[[
+Predicting our own takeoff and landing, which is what makes them instant.
+
+PPM/2's noclip is the model, and it is instant for two separate reasons.
+It refreshes on the transition rather than waiting for its own timer --
+
+    hook.Add 'PlayerNoClip', 'PPM2.WingsCheck', =>
+        timer.Simple 0, -> ... bg\SlowUpdate()      -- bodygroup_controller.moon:937
+
+-- and, the half that actually matters here, the thing it refreshes FROM is
+MOVETYPE_NOCLIP, which the local player's own prediction has already changed.
+Nothing is waited on because nothing had to travel.
+
+We had the first half already: the watcher below sees ppm2_fly change and
+refreshes the same frame. But ppm2_fly is set by the server, so no amount of
+refreshing beats the round trip -- refreshing sooner only recomputes from a
+flag that has not arrived, and SelectWingsType reads it as still false.
+
+So the flag is written locally the moment the client can know, and the server
+is left to confirm. Both edges are honestly predictable from what the client
+already has: takeoff is the same double-tapped jump the server's KeyPress
+hook watches, and CanFly reads the race NW var; landing is OnGround, which
+for yourself is predicted, and which is the server's own landing test.
+
+Only for LocalPlayer. Everypony else's takeoff is genuinely unknowable until
+it is networked, and PPM/2's noclip is no different -- movetype has to travel
+for other players too.
+]]
+local PREDICTION_TIMEOUT = 0.5
+
+local predictedAt = nil
+local predictedFlying = false
+
+local function predictFlying(flying)
+    local ply = LocalPlayer()
+    if not IsValid(ply) then return end
+    if predictedFlying == flying and predictedAt then return end
+
+    predictedAt = CurTime()
+    predictedFlying = flying
+
+    -- PPM/2's own flag, written clientside. A local write to an NW2 var lives
+    -- until the server sends that var again, which is exactly the reconcile
+    -- we want: the authoritative value lands a round trip later and agrees.
+    ply:SetNW2Bool(Flight.PPM2_NW_VAR, flying)
+
+    wingState[ply] = flying
+    refreshWings(ply)
+end
+
+--[[
+Give the prediction back if the server never agrees.
+
+Reconciled against ponyrp_flying rather than ppm2_fly, because ppm2_fly is
+the var we just overwrote and cannot be trusted to disagree with us. The
+server's refusals are all conditions the client cannot see -- a race change
+mid-jump, a vehicle, the cooldown -- and in that case it never sends ppm2_fly
+at all, since from its side nothing changed. Nothing would ever put the wings
+back. So the timeout is not belt and braces; it is the only correction there is.
+]]
+local function reconcilePrediction()
+    if not predictedAt then return end
+
+    local ply = LocalPlayer()
+    if not IsValid(ply) then return end
+
+    if Flight.IsFlying(ply) == predictedFlying then
+        predictedAt = nil
+        return
+    end
+
+    if CurTime() - predictedAt < PREDICTION_TIMEOUT then return end
+
+    predictedAt = nil
+    predictedFlying = not predictedFlying
+
+    ply:SetNW2Bool(Flight.PPM2_NW_VAR, predictedFlying)
+    wingState[ply] = predictedFlying
+    refreshWings(ply)
+end
+
+-- The same double tap sv_flight.lua's KeyPress hook watches, on the same
+-- terms, so the two sides reach the same answer from the same inputs rather
+-- than one guessing at the other.
+local lastJump = 0
+
+hook.Add("KeyPress", "PonyRP.Flight.PredictTakeoff", function(ply, key)
+    if ply ~= LocalPlayer() then return end
+    if key ~= IN_JUMP then return end
+    if Flight.IsFlying(ply) or predictedFlying then return end
+    if ply:OnGround() or not Flight.CanFly(ply) then return end
+
+    if CurTime() - lastJump <= Flight.DOUBLE_TAP then
+        lastJump = 0
+        predictFlying(true)
+    else
+        lastJump = CurTime()
+    end
+end)
 
 local function updateLean(ply)
     local state = lean[ply]
@@ -218,6 +317,16 @@ hook.Add("Think", "PonyRP.Flight.Presentation", function()
             wasFlying = flying
             setThirdPerson(flying)
         end
+
+        -- Landing is the server's own exit test -- sv_flight.lua's FinishMove
+        -- stops flight on OnGround and nothing else -- and OnGround for
+        -- yourself is predicted, so the client reaches that answer at the same
+        -- instant rather than being told about it a round trip later.
+        if (flying or predictedFlying) and localPly:OnGround() then
+            predictFlying(false)
+        end
+
+        reconcilePrediction()
     end
 
     for _, ply in ipairs(player.GetAll()) do
