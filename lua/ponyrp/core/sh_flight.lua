@@ -64,6 +64,8 @@ Flight.ACCEL = 900          -- hu/s^2 toward the wished velocity
 Flight.GLIDE_DRAG = 0.55    -- per second decay when no input; low, so momentum carries
 Flight.SINK = 55            -- passive sink when not climbing, so altitude costs flaps
 Flight.DOUBLE_TAP = 0.32    -- seconds between the two Space presses
+Flight.BEAT_INTERVAL = 1.2  -- wingbeat cadence; constant, see sv_flight.lua
+Flight.BEAT_VOLUME = 0.3
 
 Flight.WINGBEATS = {
     "ponyrp/wingbeat1.wav",

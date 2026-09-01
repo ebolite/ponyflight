@@ -119,13 +119,29 @@ local function applyBodygroups(ply)
     end
 end
 
+--[[
+Re-asserted across a short window rather than once.
+
+The wings lagged both opening and closing. PPM2 rebuilds its bodygroups and
+merged models on its own schedule, so a single call can be undone moments
+later by a rebuild that was already in flight. Re-applying over ~0.3s means
+whichever pass lands, ours is the one after it.
+
+This cannot remove the first part of the delay: flight state is server
+authoritative, so the ppm2_fly flag costs a network round trip before the
+client can act on it at all. Killing that too would mean predicting takeoff
+on the client and setting the wing bodygroup directly, which duplicates
+PPM2's own wing-type arithmetic -- worth doing only if the remaining lag is
+still objectionable.
+]]
+local REASSERT_AT = { 0, 0.05, 0.15, 0.3 }
+
 local function refreshWings(ply)
     applyBodygroups(ply)
 
-    -- Re-assert next tick. PPM2 rebuilds bodygroups on its own schedule, and
-    -- a rebuild landing in the same frame as ours would otherwise restore
-    -- the state we just cleared.
-    timer.Simple(0, function() applyBodygroups(ply) end)
+    for _, delay in ipairs(REASSERT_AT) do
+        timer.Simple(delay, function() applyBodygroups(ply) end)
+    end
 end
 
 local function updateLean(ply)

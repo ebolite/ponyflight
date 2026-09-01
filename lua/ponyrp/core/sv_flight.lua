@@ -86,31 +86,24 @@ function Flight.Stop(ply, reason)
 end
 
 --[[
-Double-tapped Space, both ways: midair it takes off, and in flight it drops
-you again. Requiring midair to start means a standing start already costs a
-jump, which is the only brake on takeoff until playtest says whether it needs
-a real one.
+Double-tapped Space, midair, to take off. Requiring midair means a standing
+start already costs a jump, which is the only brake on takeoff until playtest
+says whether it needs a real one.
 
-Holding Space to climb is one KeyPress, not a stream of them, so cruising
-upward cannot land you by accident -- it takes two deliberate taps.
+There is deliberately no air-toggle to land: descending and touching down is
+the only way out. That makes landing something you fly rather than a key you
+press, and it keeps Space unambiguous in the air, where it is the climb.
 ]]
-hook.Add("KeyPress", "PonyRP.Flight.Toggle", function(ply, key)
+hook.Add("KeyPress", "PonyRP.Flight.Takeoff", function(ply, key)
     if key ~= IN_JUMP then return end
-
-    local flying = Flight.IsFlying(ply)
-
-    if not flying and (ply:OnGround() or not Flight.CanFly(ply)) then return end
+    if Flight.IsFlying(ply) then return end
+    if ply:OnGround() or not Flight.CanFly(ply) then return end
 
     local last = ply.ponyrpFlightLastJump or 0
 
     if CurTime() - last <= Flight.DOUBLE_TAP then
         ply.ponyrpFlightLastJump = 0
-
-        if flying then
-            Flight.Stop(ply, "toggled")
-        else
-            Flight.Start(ply)
-        end
+        Flight.Start(ply)
     else
         ply.ponyrpFlightLastJump = CurTime()
     end
@@ -161,22 +154,23 @@ hook.Add("FinishMove", "PonyRP.Flight.Upkeep", function(ply, mv)
         return
     end
 
-    -- Wingbeat. There is no flapping animation to follow -- PPM2's wings in
-    -- flight are a bodygroup swap, not a cycle -- so the sound carries the
-    -- rhythm itself. Climbing beats hard and fast, gliding barely at all.
+    -- Wingbeat, on a constant cadence.
+    --
+    -- It used to scale with speed, and that sounded wrong for a real reason:
+    -- PPM2's wings in flight are a bodygroup swap, not an animation, so the
+    -- wingbeat you can see has no speed for the audio to track. Audio that
+    -- sped up against wings that held still read as two unrelated things.
+    -- A fixed cadence matches what is actually on screen; the jitter and the
+    -- five variations keep it off a metronome.
     if CurTime() >= (ply.ponyrpFlightNextBeat or 0) then
-        local climbing = mv:KeyDown(IN_JUMP)
-        local effort = climbing and 1 or math.Clamp(speed / (Flight.SPEED * 1.2), 0, 1)
-        local interval = Lerp(effort, 1.7, 0.68)
-
         ply:EmitSound(
             Flight.WINGBEATS[math.random(#Flight.WINGBEATS)],
             70,
             math.random(94, 106),
-            climbing and 0.375 or 0.27,
+            Flight.BEAT_VOLUME,
             CHAN_BODY)
 
-        ply.ponyrpFlightNextBeat = CurTime() + interval * math.Rand(0.92, 1.08)
+        ply.ponyrpFlightNextBeat = CurTime() + Flight.BEAT_INTERVAL * math.Rand(0.94, 1.06)
     end
 end)
 
