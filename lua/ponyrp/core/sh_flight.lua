@@ -29,11 +29,11 @@ only; its Move and FinishMove hooks are gated purely on the ppm2_fly
 networked bool, so anything that sets that bool still gets PPM2's movement
 bolted on. We remove those three hooks outright and set the convar as well.
 
-CalcMainActivity is deliberately left alone. While ppm2_fly is set it puts
-the pony into the noclip gesture and disables IK, and PPM2's bodygroup
-controller keys spread wings off the same bool. So we set ppm2_fly ourselves
-purely as a visual flag, and inherit the flight pose and the spread wings
-with none of the movement attached.
+The client also replaces PPM2's CalcMainActivity hook. PPM2 couples its
+noclip leg pose, disabled IK, and wing-flap gesture to ppm2_fly; PonyRP keeps
+the pose and disabled IK for the whole flight while using that flag only for
+the Space-held flap gesture. The clientside bodygroup override keeps the
+wings spread while gliding.
 ]]
 
 PonyRP = PonyRP or {}
@@ -44,6 +44,10 @@ local Flight = PonyRP.Flight
 -- Networked so the client's own movement prediction and everypony else's
 -- rendering agree on who is flying.
 Flight.NW_VAR = "ponyrp_flying"
+
+-- Separate from flight so clients can keep the wings spread while the
+-- server-owned flap gesture follows Space.
+Flight.FLAP_NW_VAR = "ponyrp_flapping"
 
 -- PPM2's visual flag. We drive it; PPM2 reads it for the pose and wings.
 Flight.PPM2_NW_VAR = "ppm2_fly"
@@ -64,8 +68,16 @@ Flight.ACCEL = 900          -- hu/s^2 toward the wished velocity
 Flight.GLIDE_DRAG = 0.55    -- per second decay when no input; low, so momentum carries
 Flight.SINK = 55            -- passive sink when not climbing, so altitude costs flaps
 Flight.DOUBLE_TAP = 0.32    -- seconds between the two Space presses
-Flight.BEAT_INTERVAL = 1.2  -- wingbeat cadence; constant, see sv_flight.lua
+Flight.BEAT_INTERVAL = 0.5  -- fallback duration of one full flap sequence
 Flight.BEAT_VOLUME = 0.3
+
+-- PPM2's CalcMainActivity returns this sequence for its flight gesture.
+-- SequenceDuration lets each client finish the actual model cycle instead
+-- of assuming the sound cadence and animation length are identical.
+Flight.FLAP_SEQUENCE = 370
+Flight.FLAP_DURATION_FALLBACK = Flight.BEAT_INTERVAL
+-- Sequence 370 contains two audible wing strokes.
+Flight.BEATS_PER_FLAP_SEQUENCE = 2
 
 Flight.WINGBEATS = {
     "ponyrp/wingbeat1.wav",
@@ -84,6 +96,7 @@ end
 function Flight.CanFly(ply)
     if not IsValid(ply) or not ply:Alive() then return false end
     if ply:InVehicle() then return false end
+    if ply:WaterLevel() > 0 then return false end
 
     local Tribes = tribes()
     if not Tribes then return false end
@@ -95,6 +108,22 @@ function Flight.IsFlying(ply)
     return IsValid(ply) and ply:GetNWBool(Flight.NW_VAR, false)
 end
 
+function Flight.IsFlapping(ply)
+    return IsValid(ply) and ply:GetNWBool(Flight.FLAP_NW_VAR, false)
+end
+
+function Flight.FlapCycleDuration(ply)
+    if IsValid(ply) and isfunction(ply.SequenceDuration) then
+        local duration = tonumber(ply:SequenceDuration(Flight.FLAP_SEQUENCE))
+
+        if duration and duration > 0.05 and duration < 5 then
+            return duration
+        end
+    end
+
+    return Flight.FLAP_DURATION_FALLBACK
+end
+
 -- Alicorns fly at half speed ("slow and primarily vertical", spec §2); the
 -- multiplier already lives in the tribe stat table, so read it rather than
 -- duplicating the balance decision here.
@@ -102,6 +131,14 @@ function Flight.SpeedMult(ply)
     local Tribes = tribes()
     if not Tribes then return 1 end
     return Tribes.GetStats(Tribes.GetRace(ply)).flightSpeedMult or 1
+end
+
+function Flight.VerticalSpeedMult(ply)
+    local Tribes = tribes()
+    if not Tribes then return 1 end
+
+    local stats = Tribes.GetStats(Tribes.GetRace(ply))
+    return stats.flightVerticalMult or stats.flightSpeedMult or 1
 end
 
 --[[
@@ -139,6 +176,7 @@ hook.Add("Move", "PonyRP.Flight.Move", function(ply, mv)
     if not Flight.IsFlying(ply) then return end
 
     local mult = Flight.SpeedMult(ply)
+    local verticalMult = Flight.VerticalSpeedMult(ply)
     local ang = mv:GetMoveAngles()
     local vel = mv:GetVelocity()
     local dt = FrameTime()
@@ -173,9 +211,9 @@ hook.Add("Move", "PonyRP.Flight.Move", function(ply, mv)
     local vertical = vel.z
 
     if mv:KeyDown(IN_JUMP) then
-        vertical = Lerp(math.min(Flight.ACCEL * dt / Flight.CLIMB_SPEED, 1), vertical, Flight.CLIMB_SPEED * mult)
+        vertical = Lerp(math.min(Flight.ACCEL * dt / Flight.CLIMB_SPEED, 1), vertical, Flight.CLIMB_SPEED * verticalMult)
     elseif mv:KeyDown(IN_DUCK) then
-        vertical = Lerp(math.min(Flight.ACCEL * dt / Flight.DIVE_SPEED, 1), vertical, -Flight.DIVE_SPEED * mult)
+        vertical = Lerp(math.min(Flight.ACCEL * dt / Flight.DIVE_SPEED, 1), vertical, -Flight.DIVE_SPEED * verticalMult)
     else
         -- Passive sink. Holding altitude costs a flap, which is what gives
         -- the wingbeat a rhythm worth hearing.

@@ -55,20 +55,29 @@ local function gib(ply)
     ply:Kill()
 end
 
+local function setFlapping(ply, flapping)
+    if ply:GetNWBool(Flight.FLAP_NW_VAR, false) == flapping and
+            ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) == flapping then
+        return
+    end
+
+    ply:SetNWBool(Flight.FLAP_NW_VAR, flapping)
+    ply:SetNW2Bool(Flight.PPM2_NW_VAR, flapping)
+end
+
 function Flight.Start(ply)
     if not Flight.CanFly(ply) or Flight.IsFlying(ply) then return end
 
     ply:SetNWBool(Flight.NW_VAR, true)
 
-    -- PPM2's pose and spread wings key off this. Its movement hooks are
-    -- gone (sh_flight.lua), so the bool is now purely cosmetic.
-    ply:SetNW2Bool(Flight.PPM2_NW_VAR, true)
+    -- Takeoff happens on a Space press, so its first flap starts immediately.
+    -- Subsequent FinishMove calls keep this paired to the held key.
+    setFlapping(ply, true)
 
-    -- The engine still applies gravity during its own move; zero it rather
-    -- than fighting it every tick in the Move hook.
-    ply:SetGravity(0)
+    -- Gravity remains active: holding Space supplies lift, while releasing it
+    -- lets the pony lose altitude naturally.
+    ply:SetGravity(1)
     ply.ponyrpFlightLastSpeed = ply:GetVelocity():Length()
-    ply.ponyrpFlightNextBeat = 0
 
     hook.Run("PonyRP_FlightChanged", ply, true)
 end
@@ -78,7 +87,7 @@ function Flight.Stop(ply, reason)
     if not ply:GetNWBool(Flight.NW_VAR, false) then return end
 
     ply:SetNWBool(Flight.NW_VAR, false)
-    ply:SetNW2Bool(Flight.PPM2_NW_VAR, false)
+    setFlapping(ply, false)
     ply:SetGravity(1)
     ply.ponyrpFlightLastSpeed = nil
 
@@ -86,9 +95,9 @@ function Flight.Stop(ply, reason)
 end
 
 --[[
-Double-tapped Space, midair, to take off. Requiring midair means a standing
-start already costs a jump, which is the only brake on takeoff until playtest
-says whether it needs a real one.
+Double-tap Space to take off: the ground jump is tap one and the airborne
+press is tap two. A standing start therefore still costs a jump, which is
+the only brake on takeoff until playtest says whether it needs a real one.
 
 There is deliberately no air-toggle to land: descending and touching down is
 the only way out. That makes landing something you fly rather than a key you
@@ -97,11 +106,15 @@ press, and it keeps Space unambiguous in the air, where it is the climb.
 hook.Add("KeyPress", "PonyRP.Flight.Takeoff", function(ply, key)
     if key ~= IN_JUMP then return end
     if Flight.IsFlying(ply) then return end
-    if ply:OnGround() or not Flight.CanFly(ply) then return end
+    if not Flight.CanFly(ply) then return end
 
     local last = ply.ponyrpFlightLastJump or 0
 
-    if CurTime() - last <= Flight.DOUBLE_TAP then
+    -- The ordinary ground jump is tap one. Flight may only begin once the
+    -- pony is airborne, but throwing that first press away made takeoff need
+    -- a third tap. KeyPress fires at the start of the second press, so keeping
+    -- Space held after it also feeds lift to the Move hook immediately.
+    if not ply:OnGround() and CurTime() - last <= Flight.DOUBLE_TAP then
         ply.ponyrpFlightLastJump = 0
         Flight.Start(ply)
     else
@@ -110,7 +123,7 @@ hook.Add("KeyPress", "PonyRP.Flight.Takeoff", function(ply, key)
 end)
 
 --[[
-Per-move upkeep: impact detection and the wingbeat rhythm.
+Per-move upkeep: impact detection and flap-input replication.
 
 FinishMove rather than Think because it runs once per processed move with
 the post-collision velocity already resolved, which is exactly the number
@@ -154,24 +167,9 @@ hook.Add("FinishMove", "PonyRP.Flight.Upkeep", function(ply, mv)
         return
     end
 
-    -- Wingbeat, on a constant cadence.
-    --
-    -- It used to scale with speed, and that sounded wrong for a real reason:
-    -- PPM2's wings in flight are a bodygroup swap, not an animation, so the
-    -- wingbeat you can see has no speed for the audio to track. Audio that
-    -- sped up against wings that held still read as two unrelated things.
-    -- A fixed cadence matches what is actually on screen; the jitter and the
-    -- five variations keep it off a metronome.
-    if CurTime() >= (ply.ponyrpFlightNextBeat or 0) then
-        ply:EmitSound(
-            Flight.WINGBEATS[math.random(#Flight.WINGBEATS)],
-            70,
-            math.random(94, 106),
-            Flight.BEAT_VOLUME,
-            CHAN_BODY)
-
-        ply.ponyrpFlightNextBeat = CurTime() + Flight.BEAT_INTERVAL * math.Rand(0.94, 1.06)
-    end
+    -- Clients play the sound on their locally rendered gesture boundaries,
+    -- so prediction and network delay cannot separate audio from animation.
+    setFlapping(ply, mv:KeyDown(IN_JUMP))
 end)
 
 -- Everything else that should ground a pony.

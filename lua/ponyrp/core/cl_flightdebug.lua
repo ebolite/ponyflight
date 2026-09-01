@@ -13,11 +13,12 @@ them changes, with the gap since the last change. Whichever column moves late
 is the broken link, and the gaps say how late:
 
     flying     ponyrp_flying, the server's answer and what we derive from
-    ppm2       ppm2_fly, what SelectWingsType and CalcMainActivity both read
+    ppm2       ppm2_fly, now the flap gesture flag
+    flap       the server-owned ponyrp_flapping state
     pred       our prediction, and whether its window is still live
     want       what wingsWanted() decided this frame
     wings      the bodygroup actually on the model right now
-    expect     what SelectWingsType would return for the current data
+    expect     the bodygroup PonyRP will enforce (spread even while gliding)
     gesture    isPlayingPPM2Anim, set by CalcMainActivity (ponyfly.moon:291)
     move       movetype, for comparison against noclip
 
@@ -50,10 +51,9 @@ end
 -- between this and the actual bodygroup is the whole question: equal means
 -- nothing is refreshing, different means the refresh is running and losing.
 local function expectedWings(ply)
-    local controller = controllerFor(ply)
-    if not controller or not isfunction(controller.SelectWingsType) then return -1 end
+    if not isfunction(Flight.DebugVisibleWingsWanted) then return -1 end
 
-    local ok, value = pcall(controller.SelectWingsType, controller)
+    local ok, value = pcall(Flight.DebugVisibleWingsWanted, ply)
     return ok and tonumber(value) or -1
 end
 
@@ -76,6 +76,7 @@ local function snapshot(ply)
 
     return {
         flying = Flight.IsFlying(ply),
+        flap = Flight.IsFlapping(ply),
         ppm2 = ply:GetNW2Bool(Flight.PPM2_NW_VAR, false),
         pred = predictedAt and predictedFlying or nil,
         live = predictedAt ~= nil,
@@ -90,7 +91,7 @@ end
 local function differs(a, b)
     if not a then return true end
 
-    for _, key in ipairs({ "flying", "ppm2", "pred", "live", "want", "wings", "expect", "gesture", "move" }) do
+    for _, key in ipairs({ "flying", "flap", "ppm2", "pred", "live", "want", "wings", "expect", "gesture", "move" }) do
         if a[key] ~= b[key] then return true end
     end
 
@@ -116,8 +117,9 @@ hook.Add("Think", "PonyRP.Flight.Debug", function()
 
     MsgC(Color(150, 220, 255), string.format("[fly %6d +%6.2fs] ", FrameNumber(), gap))
     Msg(string.format(
-        "flying %s  ppm2 %s  pred %s%s  want %s  wings %-3d expect %-3d %s gesture %s  move %d\n",
+        "flying %s  flap %s  ppm2 %s  pred %s%s  want %s  wings %-3d expect %-3d %s gesture %s  move %d\n",
         flag(shot.flying),
+        flag(shot.flap),
         flag(shot.ppm2),
         flag(shot.pred),
         shot.live and "*" or " ",

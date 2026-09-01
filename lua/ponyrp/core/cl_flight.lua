@@ -38,7 +38,6 @@ local THIRDPERSON_VAR = "simple_thirdperson_enabled"
 local MAX_PITCH = 17
 local MAX_ROLL = 21
 local ROLL_GAIN = 1.6
-local FORWARD_LEAN = 7      -- nose dips into forward travel, lifts going backwards
 local LEAN_RESPONSE = 6     -- exponential approach per second
 
 --[[
@@ -60,7 +59,9 @@ local RENDER_ANGLES_MOVE_ATTACHMENTS = false
 
 local lean = {}
 local wingState = {}
+local flapVisual = {}
 local weTurnedItOn = false
+local wingsWanted
 
 local function bodygroupController(ply)
     if not IsValid(ply) or not isfunction(ply.GetPonyData) then return nil end
@@ -95,19 +96,16 @@ end
 --[[
 Wings.
 
+PPM2 couples two things to ppm2_fly: its noclip gesture makes the wings flap,
+and SelectWingsType chooses the spread bodygroup. PonyRP deliberately splits
+them. ponyrp_flying decides whether the wings are spread; ponyrp_flapping and
+the local Space key decide whether ppm2_fly runs the gesture. The render-time
+override below keeps the spread bodygroup selected when that gesture is off.
+
 PPM2 only re-reads SelectWingsType inside ApplyRace, and nothing calls that
-when ppm2_fly changes -- so the spread wings appeared only when something
-unrelated happened to refresh the bodygroups, which is the "sometimes" here.
-We call it ourselves.
-
-The two bools have opposite jobs, and it took a round of getting this wrong
-to see it. ppm2_fly is what SelectWingsType reads, so it is what we WRITE.
-ponyrp_flying is what we DERIVE FROM: the server owns it, PPM/2 has never
-heard of it, and so nothing but us ever writes it.
-
-Watching ppm2_fly instead -- which this did -- means watching a value four
-other things also set, and treating each of their writes as news about
-whether a pony is flying. It is not. See wingsWanted below.
+when ppm2_fly changes, so we still trigger its refresh on flap transitions.
+Neither PPM2 flag is treated as authority: both flight and flapping derive
+from PonyRP-owned state that PPM2 never writes.
 ]]
 --[[
 ApplyBodygroups, not SlowUpdate, and the difference is the reset.
@@ -137,11 +135,31 @@ end
 -- the server's older value. Put back only the wing group immediately before
 -- drawing; this is cheap enough to be a condition rather than another
 -- cached event, and leaves every unrelated PPM/2 bodygroup alone.
+local function visibleWingsValue(ply, controller)
+    controller = controller or bodygroupController(ply)
+    if not controller or not isfunction(controller.SelectWingsType) then return end
+
+    local wanted = tonumber(controller:SelectWingsType())
+    if not wanted then return end
+
+    -- ppm2_fly now means "flapping", but a gliding pony still uses the
+    -- spread-wing bodygroup. SelectWingsType adds this same offset while the
+    -- PPM2 flag is true; add it ourselves only for the glide case.
+    local ppm2Spread = ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) or
+        (isfunction(ply.GetMoveType) and ply:GetMoveType() == MOVETYPE_NOCLIP)
+
+    if wingsWanted(ply) and not ppm2Spread then
+        wanted = wanted + PPM2.MAX_WINGS + 1
+    end
+
+    return wanted
+end
+
 local function applyVisibleWings(ply)
     if not Flight.CanFly(ply) then return end
 
     local controller = bodygroupController(ply)
-    if not controller or not isfunction(controller.SelectWingsType) then return end
+    if not controller then return end
 
     -- BODYGROUP_WINGS is controller-specific: 2 on the new model, 3 on the
     -- old one. PPM2.BODYGROUP_WINGS is only the old-model default.
@@ -149,7 +167,8 @@ local function applyVisibleWings(ply)
     local group = tonumber(class and class.BODYGROUP_WINGS or controller.BODYGROUP_WINGS)
     if not group or group < 0 then return end
 
-    local wanted = tonumber(controller:SelectWingsType())
+    local wanted = visibleWingsValue(ply, controller)
+
     if not wanted or ply:GetBodygroup(group) == wanted then return end
 
     ply:SetBodygroup(group, wanted)
@@ -251,7 +270,7 @@ prediction is a bounded override on top, live only until the server catches
 up or the window lapses, so it can never outlive its usefulness or win an
 argument against the server.
 ]]
-local function wingsWanted(ply)
+wingsWanted = function(ply)
     local base = Flight.IsFlying(ply)
 
     if ply ~= LocalPlayer() or not predictedAt then return base end
@@ -273,7 +292,7 @@ local function wingsWanted(ply)
 end
 
 --[[
-Assert it, every frame, for every pony.
+Assert the PPM2 flap flag every frame, for every pony.
 
 Cheap -- a bool compare per player, and the write and rebuild only happen on
 the frames where something has actually knocked the value off. That makes the
@@ -282,22 +301,171 @@ there are at least four things that do, it is right again the next frame
 instead of until the next time the server happens to change its mind.
 
 This is what carries other ponies too. Their base is the networked
-ponyrp_flying, so PPM/2 zeroing ppm2_fly under a flying pegasus across the
-map now heals in a frame, where before it was permanent for them as well.
+ponyrp_flapping, so PPM/2 zeroing ppm2_fly while a pegasus is actively
+flapping heals in a frame, where before it could be permanent.
 ]]
+local function flappingWanted(ply, flying)
+    flying = flying == nil and wingsWanted(ply) or flying
+
+    local state = flapVisual[ply]
+    if not state then
+        state = {
+            active = false,
+            startedAt = 0,
+            stopAt = nil,
+            duration = Flight.FLAP_DURATION_FALLBACK,
+            beatInterval = Flight.FLAP_DURATION_FALLBACK / Flight.BEATS_PER_FLAP_SEQUENCE,
+            nextBeatAt = nil
+        }
+        flapVisual[ply] = state
+    end
+
+    -- Landing and every forced flight exit still stop immediately. The
+    -- cycle completion is only for releasing Space during an active flight.
+    if not flying then
+        state.active = false
+        state.stopAt = nil
+        state.nextBeatAt = nil
+        return false
+    end
+
+    -- Local buttons are predicted; every other player's held state comes
+    -- from the server. Each client owns the visual latch, so network delay
+    -- cannot make a remote gesture get cut at the server's cycle boundary.
+    local held
+
+    if ply == LocalPlayer() then
+        held = ply:KeyDown(IN_JUMP)
+    else
+        held = Flight.IsFlapping(ply)
+    end
+
+    local now = CurTime()
+
+    if held then
+        if not state.active then
+            state.active = true
+            state.startedAt = now
+            state.duration = Flight.FlapCycleDuration(ply)
+            state.beatInterval = state.duration / Flight.BEATS_PER_FLAP_SEQUENCE
+            state.nextBeatAt = now
+        end
+
+        -- Pressing Space again while the last cycle is finishing simply
+        -- resumes the already-running gesture.
+        state.stopAt = nil
+
+        if state.nextBeatAt and now >= state.nextBeatAt then
+            local cycle = math.floor((now - state.startedAt) / state.beatInterval)
+            local boundary = state.startedAt + cycle * state.beatInterval
+            local lateness = now - boundary
+
+            -- A normal frame lands just after the boundary. After a long
+            -- hitch, skip the stale beat rather than playing it immediately
+            -- before the next correctly phased one.
+            if lateness <= math.min(state.beatInterval * 0.25, 0.1) then
+                ply:EmitSound(
+                    Flight.WINGBEATS[math.random(#Flight.WINGBEATS)],
+                    70,
+                    math.random(94, 106),
+                    Flight.BEAT_VOLUME,
+                    CHAN_BODY)
+            end
+
+            state.nextBeatAt = boundary + state.beatInterval
+        end
+    elseif state.active then
+        if not state.stopAt then
+            local elapsed = math.max(now - state.startedAt, 0)
+            local cycles = math.max(math.ceil(elapsed / state.duration), 1)
+            state.stopAt = state.startedAt + cycles * state.duration
+        end
+
+        if now >= state.stopAt then
+            state.active = false
+            state.stopAt = nil
+            state.nextBeatAt = nil
+        end
+    end
+
+    return state.active
+end
+
 local function enforceWings(ply)
-    local wanted = wingsWanted(ply)
+    local flying = wingsWanted(ply)
+    local wanted = flappingWanted(ply, flying)
 
     if ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) == wanted and wingState[ply] == wanted then
-        return wanted
+        return flying, wanted
     end
 
     ply:SetNW2Bool(Flight.PPM2_NW_VAR, wanted)
     wingState[ply] = wanted
     refreshWings(ply)
 
-    return wanted
+    return flying, wanted
 end
+
+--[[
+Flight activity, independently of the flap gesture.
+
+PPM/2's CalcMainActivity couples both to ppm2_fly: true selects sequence 370
+and starts ACT_GMOD_NOCLIP_LAYER as a gesture; false removes the gesture,
+restores IK, and falls through to the standing activity. That made releasing
+Space straighten the legs even though PonyRP flight was still active.
+
+Take ownership of that hook so the base activity and IK follow flying, while
+only the gesture follows ppm2_fly. The same isPlayingPPM2Anim marker PPM/2
+uses makes hot reload clean up a gesture started by either implementation.
+]]
+local function removePPM2FlightActivity()
+    hook.Remove("CalcMainActivity", "PPM2.Ponyfly")
+end
+
+removePPM2FlightActivity()
+timer.Simple(0, removePPM2FlightActivity)
+hook.Add("InitPostEntity", "PonyRP.Flight.NeuterPPM2Activity", function()
+    timer.Simple(0, removePPM2FlightActivity)
+end)
+hook.Add("OnReloaded", "PonyRP.Flight.NeuterPPM2Activity", function()
+    timer.Simple(0, removePPM2FlightActivity)
+end)
+
+hook.Add("CalcMainActivity", "PonyRP.Flight.Activity", function(ply)
+    local flying = wingsWanted(ply)
+    local isNewPony = not isfunction(ply.IsNewPonyCached) or ply:IsNewPonyCached()
+
+    if not flying or not isNewPony then
+        if not ply.ponyrpFlightActivity then return end
+
+        ply.ponyrpFlightActivity = nil
+
+        if ply.isPlayingPPM2Anim then
+            ply.isPlayingPPM2Anim = false
+            ply:AnimResetGestureSlot(GESTURE_SLOT_CUSTOM)
+        end
+
+        ply:SetIK(true)
+        return
+    end
+
+    ply.ponyrpFlightActivity = true
+
+    if ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) then
+        if not ply.isPlayingPPM2Anim then
+            ply.isPlayingPPM2Anim = true
+            ply:AnimRestartGesture(GESTURE_SLOT_CUSTOM, ACT_GMOD_NOCLIP_LAYER, false)
+        end
+    elseif ply.isPlayingPPM2Anim then
+        ply.isPlayingPPM2Anim = false
+        ply:AnimResetGestureSlot(GESTURE_SLOT_CUSTOM)
+    end
+
+    -- Ground IK is what pulls the legs back toward their standing pose. Keep
+    -- it disabled for the entire flight, not merely while Space is held.
+    ply:SetIK(false)
+    return ACT_GMOD_NOCLIP_LAYER, Flight.FLAP_SEQUENCE
+end)
 
 -- The same double tap sv_flight.lua's KeyPress hook watches, on the same
 -- terms, so the two sides reach the same answer from the same inputs rather
@@ -310,9 +478,9 @@ hook.Add("KeyPress", "PonyRP.Flight.PredictTakeoff", function(ply, key)
     -- Only an ACTIVE prediction blocks a new one. Testing predictedFlying on
     -- its own tested a stale guess and refused to predict at all.
     if Flight.IsFlying(ply) or (predictedAt and predictedFlying) then return end
-    if ply:OnGround() or not Flight.CanFly(ply) then return end
+    if not Flight.CanFly(ply) then return end
 
-    if CurTime() - lastJump <= Flight.DOUBLE_TAP then
+    if not ply:OnGround() and CurTime() - lastJump <= Flight.DOUBLE_TAP then
         lastJump = 0
         predictFlying(true)
     else
@@ -320,7 +488,7 @@ hook.Add("KeyPress", "PonyRP.Flight.PredictTakeoff", function(ply, key)
     end
 end)
 
-local function updateLean(ply)
+local function updateLean(ply, flapping)
     local state = lean[ply]
 
     if not state then
@@ -336,13 +504,15 @@ local function updateLean(ply)
         local direction = velocity / speed
         local facing = Angle(0, ply:EyeAngles().y, 0)
 
-        -- Nose follows the flight path: climbing tips up, diving tips down.
-        targetPitch = -math.deg(math.asin(math.Clamp(direction.z, -1, 1)))
+        local forwardVelocity = direction:Dot(facing:Forward())
 
-        -- Plus a subtle tip into forward travel, so level cruising still
-        -- reads as going somewhere rather than sitting still.
-        targetPitch = targetPitch + direction:Dot(facing:Forward()) * FORWARD_LEAN
-        targetPitch = math.Clamp(targetPitch, -MAX_PITCH, MAX_PITCH)
+        -- Forward pitch is the powered-flight pose and relaxes while gliding.
+        -- Backward travel always pitches the other way, so reversing never
+        -- reads as another forward lean. The sign matches the pony rig:
+        -- negative pitch is nose-forward, positive is rump-forward.
+        if forwardVelocity < 0 or flapping then
+            targetPitch = math.Clamp(-forwardVelocity * MAX_PITCH, -MAX_PITCH, MAX_PITCH)
+        end
 
         -- Bank into sideways travel. Dotting against the facing's right axis
         -- means the roll reads as leaning into the turn rather than reacting
@@ -430,8 +600,10 @@ hook.Add("Think", "PonyRP.Flight.Presentation", function()
     for _, ply in ipairs(player.GetAll()) do
         -- Lean off the same answer the wings use, so the body banks on the
         -- prediction too rather than a round trip behind its own wings.
-        if enforceWings(ply) then
-            local state = updateLean(ply)
+        local flying, flapping = enforceWings(ply)
+
+        if flying then
+            local state = updateLean(ply, flapping)
 
             if RENDER_ANGLES_MOVE_ATTACHMENTS then
                 -- Set here rather than in a draw hook so PPM2's PrePlayerDraw,
@@ -491,6 +663,7 @@ end)
 hook.Add("EntityRemoved", "PonyRP.Flight.Cleanup", function(ent)
     lean[ent] = nil
     wingState[ent] = nil
+    flapVisual[ent] = nil
 end)
 
 -- Exposed for cl_flightdebug.lua. The prediction is two file-locals, and the
@@ -502,4 +675,12 @@ end
 
 function Flight.DebugWingsWanted(ply)
     return wingsWanted(ply)
+end
+
+function Flight.DebugFlappingWanted(ply)
+    return flappingWanted(ply)
+end
+
+function Flight.DebugVisibleWingsWanted(ply)
+    return visibleWingsValue(ply)
 end
