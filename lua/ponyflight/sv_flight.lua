@@ -73,14 +73,10 @@ hook.Add("KeyPress", "PonyFlight.Takeoff", function(ply, key)
     if Flight.IsFlying(ply) then return end
     if not Flight.CanFly(ply) then return end
 
-    local last = ply.ponyFlightLastJump or 0
-
-    -- Discarding the ground jump made takeoff need a third tap.
-    if not ply:OnGround() and CurTime() - last <= Flight.DOUBLE_TAP then
-        ply.ponyFlightLastJump = 0
+    -- One press, as long as we are already airborne. Jumping still costs the
+    -- press that leaves the ground, so a standing takeoff is jump then fly
+    if not ply:OnGround() then
         Flight.Start(ply)
-    else
-        ply.ponyFlightLastJump = CurTime()
     end
 end)
 

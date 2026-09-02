@@ -14,7 +14,6 @@ Flight.SPEED = 650          -- base horizontal flight speed
 Flight.CLIMB_SPEED = 420    -- lift target, not achieved climb -- gravity takes most of it
 Flight.ACCEL = 900          -- in hu/s^2
 Flight.GLIDE_DRAG = 0.55    -- per second decay
-Flight.DOUBLE_TAP = 0.32    -- seconds allowed between the two Space presses
 Flight.BEAT_VOLUME = 0.3    -- volume of the wingbeat sfx
 
 -- wing_open_l repeats every 20 frames

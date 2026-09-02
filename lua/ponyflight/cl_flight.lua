@@ -19,7 +19,7 @@ local RENDER_ANGLES_MOVE_ATTACHMENTS = false
 local lean = {}
 local wingState = {}
 local flapVisual = {}
-local suspendedSimpleThirdPerson = false
+local weTurnedItOn = false
 local wingsWanted
 
 local function bodygroupController(ply)
@@ -31,20 +31,25 @@ local function bodygroupController(ply)
     return data:GetBodygroupController()
 end
 
--- We run our own camera during flight, so Simple ThirdPerson (207948202) has to
--- stand down while we do -- both of us drive CalcView and they would fight.
--- Only sampled at takeoff, so toggling it mid-flight is left alone.
-local function suspendSimpleThirdPerson(flying)
-    local convar = GetConVar(THIRDPERSON_VAR)
+-- Simple ThirdPerson (207948202) gets the camera when it is installed, since the
+-- player has already tuned its distance and smoothing to their taste. Our own
+-- camera below is the fallback for anypony without it
+local function simpleThirdPerson()
+    return GetConVar(THIRDPERSON_VAR)
+end
+
+-- Only sampled at takeoff, so toggling it mid-flight is left alone
+local function useSimpleThirdPerson(flying)
+    local convar = simpleThirdPerson()
     if not convar then return end
 
     if flying then
-        if not convar:GetBool() then return end
-        suspendedSimpleThirdPerson = true
-        RunConsoleCommand(THIRDPERSON_VAR, "0")
-    elseif suspendedSimpleThirdPerson then
-        suspendedSimpleThirdPerson = false
+        if convar:GetBool() then return end
+        weTurnedItOn = true
         RunConsoleCommand(THIRDPERSON_VAR, "1")
+    elseif weTurnedItOn then
+        weTurnedItOn = false
+        RunConsoleCommand(THIRDPERSON_VAR, "0")
     end
 end
 
@@ -222,9 +227,7 @@ local function enforceWings(ply)
     return flying, wanted
 end
 
--- Predicted double tap flight is the same as the sv_flight.lua version
-local lastJump = 0
-
+-- Predicts the same single airborne press sv_flight.lua takes off on
 hook.Add("KeyPress", "PonyFlight.PredictTakeoff", function(ply, key)
     if ply ~= LocalPlayer() then return end
     if key ~= IN_JUMP then return end
@@ -232,11 +235,8 @@ hook.Add("KeyPress", "PonyFlight.PredictTakeoff", function(ply, key)
     if Flight.IsFlying(ply) or (predictedAt and predictedFlying) then return end
     if not Flight.CanFly(ply) then return end
 
-    if not ply:OnGround() and CurTime() - lastJump <= Flight.DOUBLE_TAP then
-        lastJump = 0
+    if not ply:OnGround() then
         predictFlying(true)
-    else
-        lastJump = CurTime()
     end
 end)
 
@@ -316,7 +316,7 @@ hook.Add("Think", "PonyFlight.Presentation", function()
 
         if shown ~= wasFlying then
             wasFlying = shown
-            suspendSimpleThirdPerson(shown)
+            useSimpleThirdPerson(shown)
         end
     end
 
@@ -394,6 +394,7 @@ end
 
 -- Pulled in on whatever it hits so the view never ends up inside geometry
 hook.Add("CalcView", "PonyFlight.Camera", function(ply, origin, angles, fov)
+    if simpleThirdPerson() then return end
     if not Flight.VisualFlying(ply) then return end
 
     local eyes = ply:EyePos()
@@ -415,7 +416,7 @@ hook.Add("CalcView", "PonyFlight.Camera", function(ply, origin, angles, fov)
     }
 end)
 
--- A disconnect or a lua_reload mid-flight would otherwise leave their setting off
+-- A disconnect or a lua_reload mid-flight would otherwise leave them in third person
 hook.Add("ShutDown", "PonyFlight.RestoreThirdPerson", function()
-    suspendSimpleThirdPerson(false)
+    useSimpleThirdPerson(false)
 end)
