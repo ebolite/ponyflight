@@ -19,7 +19,7 @@ is the broken link, and the gaps say how late:
     want       what wingsWanted() decided this frame
     wings      the bodygroup actually on the model right now
     expect     the bodygroup PonyRP will enforce (spread even while gliding)
-    gesture    isPlayingPPM2Anim, set by CalcMainActivity (ponyfly.moon:291)
+    gesture    isPlayingPPM2Anim; now follows flight, not the flap flag
     move       movetype, for comparison against noclip
 
 Read it against the two known-good references. Noclip flips move and gesture

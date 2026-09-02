@@ -292,6 +292,23 @@ wingsWanted = function(ply)
 end
 
 --[[
+Hand the prediction to the shared flight activity hook.
+
+sh_flight.lua owns CalcMainActivity now, in both realms, because a
+server-only PPM/2 fallback was straightening the legs mid-glide -- the
+reasoning is there. It reads Flight.VisualFlying, which on its own is
+just the server's answer; overriding it here is what lets the local
+pony's pose change on the same frame as their wings and their camera,
+from the same guess, rather than a round trip behind all three.
+
+Assigned rather than hooked so there is exactly one answer per realm and
+no question of which wins.
+]]
+function Flight.VisualFlying(ply)
+    return wingsWanted(ply)
+end
+
+--[[
 Assert the PPM2 flap flag every frame, for every pony.
 
 Cheap -- a bool compare per player, and the write and rebuild only happen on
@@ -313,8 +330,6 @@ local function flappingWanted(ply, flying)
             active = false,
             startedAt = 0,
             stopAt = nil,
-            duration = Flight.FLAP_DURATION_FALLBACK,
-            beatInterval = Flight.FLAP_DURATION_FALLBACK / Flight.BEATS_PER_FLAP_SEQUENCE,
             nextBeatAt = nil
         }
         flapVisual[ply] = state
@@ -322,6 +337,12 @@ local function flappingWanted(ply, flying)
 
     -- Landing and every forced flight exit still stop immediately. The
     -- cycle completion is only for releasing Space during an active flight.
+    --
+    -- What the cycle latch is for: it lets the wing stroke in progress finish
+    -- before the wings are held. Gliding pins the flap loop at frame 0
+    -- (sh_flight.lua), and frames 0, 20 and 40 are the same pose, so a
+    -- release that lands on a stroke boundary holds without a visible snap.
+    -- One beat is one stroke, so finishing one is all it has to wait for.
     if not flying then
         state.active = false
         state.stopAt = nil
@@ -346,24 +367,22 @@ local function flappingWanted(ply, flying)
         if not state.active then
             state.active = true
             state.startedAt = now
-            state.duration = Flight.FlapCycleDuration(ply)
-            state.beatInterval = state.duration / Flight.BEATS_PER_FLAP_SEQUENCE
             state.nextBeatAt = now
         end
 
-        -- Pressing Space again while the last cycle is finishing simply
-        -- resumes the already-running gesture.
+        -- Pressing Space again while the last stroke is finishing simply
+        -- resumes the already-running rhythm.
         state.stopAt = nil
 
         if state.nextBeatAt and now >= state.nextBeatAt then
-            local cycle = math.floor((now - state.startedAt) / state.beatInterval)
-            local boundary = state.startedAt + cycle * state.beatInterval
+            local cycle = math.floor((now - state.startedAt) / Flight.BEAT_INTERVAL)
+            local boundary = state.startedAt + cycle * Flight.BEAT_INTERVAL
             local lateness = now - boundary
 
             -- A normal frame lands just after the boundary. After a long
             -- hitch, skip the stale beat rather than playing it immediately
             -- before the next correctly phased one.
-            if lateness <= math.min(state.beatInterval * 0.25, 0.1) then
+            if lateness <= math.min(Flight.BEAT_INTERVAL * 0.25, 0.1) then
                 ply:EmitSound(
                     Flight.WINGBEATS[math.random(#Flight.WINGBEATS)],
                     70,
@@ -372,13 +391,13 @@ local function flappingWanted(ply, flying)
                     CHAN_BODY)
             end
 
-            state.nextBeatAt = boundary + state.beatInterval
+            state.nextBeatAt = boundary + Flight.BEAT_INTERVAL
         end
     elseif state.active then
         if not state.stopAt then
             local elapsed = math.max(now - state.startedAt, 0)
-            local cycles = math.max(math.ceil(elapsed / state.duration), 1)
-            state.stopAt = state.startedAt + cycles * state.duration
+            local cycles = math.max(math.ceil(elapsed / Flight.FLAP_CYCLE), 1)
+            state.stopAt = state.startedAt + cycles * Flight.FLAP_CYCLE
         end
 
         if now >= state.stopAt then
@@ -405,67 +424,6 @@ local function enforceWings(ply)
 
     return flying, wanted
 end
-
---[[
-Flight activity, independently of the flap gesture.
-
-PPM/2's CalcMainActivity couples both to ppm2_fly: true selects sequence 370
-and starts ACT_GMOD_NOCLIP_LAYER as a gesture; false removes the gesture,
-restores IK, and falls through to the standing activity. That made releasing
-Space straighten the legs even though PonyRP flight was still active.
-
-Take ownership of that hook so the base activity and IK follow flying, while
-only the gesture follows ppm2_fly. The same isPlayingPPM2Anim marker PPM/2
-uses makes hot reload clean up a gesture started by either implementation.
-]]
-local function removePPM2FlightActivity()
-    hook.Remove("CalcMainActivity", "PPM2.Ponyfly")
-end
-
-removePPM2FlightActivity()
-timer.Simple(0, removePPM2FlightActivity)
-hook.Add("InitPostEntity", "PonyRP.Flight.NeuterPPM2Activity", function()
-    timer.Simple(0, removePPM2FlightActivity)
-end)
-hook.Add("OnReloaded", "PonyRP.Flight.NeuterPPM2Activity", function()
-    timer.Simple(0, removePPM2FlightActivity)
-end)
-
-hook.Add("CalcMainActivity", "PonyRP.Flight.Activity", function(ply)
-    local flying = wingsWanted(ply)
-    local isNewPony = not isfunction(ply.IsNewPonyCached) or ply:IsNewPonyCached()
-
-    if not flying or not isNewPony then
-        if not ply.ponyrpFlightActivity then return end
-
-        ply.ponyrpFlightActivity = nil
-
-        if ply.isPlayingPPM2Anim then
-            ply.isPlayingPPM2Anim = false
-            ply:AnimResetGestureSlot(GESTURE_SLOT_CUSTOM)
-        end
-
-        ply:SetIK(true)
-        return
-    end
-
-    ply.ponyrpFlightActivity = true
-
-    if ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) then
-        if not ply.isPlayingPPM2Anim then
-            ply.isPlayingPPM2Anim = true
-            ply:AnimRestartGesture(GESTURE_SLOT_CUSTOM, ACT_GMOD_NOCLIP_LAYER, false)
-        end
-    elseif ply.isPlayingPPM2Anim then
-        ply.isPlayingPPM2Anim = false
-        ply:AnimResetGestureSlot(GESTURE_SLOT_CUSTOM)
-    end
-
-    -- Ground IK is what pulls the legs back toward their standing pose. Keep
-    -- it disabled for the entire flight, not merely while Space is held.
-    ply:SetIK(false)
-    return ACT_GMOD_NOCLIP_LAYER, Flight.FLAP_SEQUENCE
-end)
 
 -- The same double tap sv_flight.lua's KeyPress hook watches, on the same
 -- terms, so the two sides reach the same answer from the same inputs rather
