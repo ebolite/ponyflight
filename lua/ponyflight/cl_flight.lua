@@ -1,35 +1,3 @@
---[[
-PonyFlight -- client presentation.
-
-Three jobs: put the camera behind the pony while flying, bank the body into
-what it is actually doing, and make PPM2 notice that the wings should be
-open.
-
-THE BODY LEANS, THE CAMERA DOES NOT
------------------------------------
-PPM2 leans you by writing SetEyeAngles every tick, plus a permanent
-sin(CurTime()) roll wobble. That fights your aim, breaks anything reading
-where you are looking, and the constant roll is a reliable way to make
-somepony motion sick. We never touch the view.
-
-The body is posed through bones, not angles. PPM2 runs ManipulateBoneAngles
-every frame in its own PrePlayerDraw (render.moon:275) and the engine
-overwrites a player's render angles regardless, so SetRenderAngles alone
-moved only the models PPM2 places itself by reading that value back -- the
-cutie mark among them. We rotate bone 0 (LrigPelvis, per PPM2's own
-bones_modifier.moon:58) through PPM2.SetupBones, the hook PPM2 calls between
-its ResetBones and its Think so other addons can pose the pony.
-
-ORDERING
---------
-Lean is computed once per frame in Think, not in the draw hooks. Two reasons:
-PPM2's PrePlayerDraw runs at priority -2 and positions the cutie mark from
-render angles, so anything set during a draw hook reaches the mark a frame
-late -- it visibly trailed the body. And the smoothing advances by FrameTime,
-so computing it in a draw hook would step it once per render pass rather than
-once per frame, which reflections and RT cameras would multiply.
-]]
-
 local Flight = PonyFlight
 
 local THIRDPERSON_VAR = "simple_thirdperson_enabled"
@@ -40,21 +8,8 @@ local MAX_ROLL = 21
 local ROLL_GAIN = 1.6
 local LEAN_RESPONSE = 6     -- exponential approach per second
 
---[[
-Off, and this is the answer to why the mark drifted out of sync.
-
-Setting render angles moved PPM2's attached pieces back when nothing else
-was leaning, which read as "render angles are how you move the mark". They
-are not: those pieces are bonemerged, so they already inherit the bone lean,
-and a bonemerged child also picks up the parent's render matrix. Writing
-both rotated them twice, about two different pivots -- the entity origin and
-the pelvis -- so they diverged from the body instead of matching it. Only
-the body itself ignored the render angles, which is what made the earlier
-symptom look the opposite way round.
-
-The bones drive everything. Left as a named constant because it is the one
-knob worth reaching for if attachments ever stop tracking again.
-]]
+-- Bones drive the lean. Setting render angles as well rotates PPM2's
+-- bonemerged pieces twice, about two different pivots, and they drift.
 local RENDER_ANGLES_MOVE_ATTACHMENTS = false
 
 local lean = {}
@@ -72,13 +27,8 @@ local function bodygroupController(ply)
     return data:GetBodygroupController()
 end
 
---[[
-Third person. Simple ThirdPerson (207948202) owns the camera; we only flip
-its convar, so the player keeps their own distance, offsets and smoothing
-rather than getting a second, worse camera from us. Restored only if we were
-the one who turned it on -- somepony who already plays in third person should
-not be dropped into first person for landing.
-]]
+-- Simple ThirdPerson (207948202) owns the camera; we only flip its convar, so
+-- the player keeps their own distance and smoothing. Restored only if we set it.
 local function setThirdPerson(enabled)
     local convar = GetConVar(THIRDPERSON_VAR)
     if not convar then return end
@@ -93,36 +43,10 @@ local function setThirdPerson(enabled)
     end
 end
 
---[[
-Wings.
-
-PPM2 couples two things to ppm2_fly: its noclip gesture makes the wings flap,
-and SelectWingsType chooses the spread bodygroup. PonyFlight deliberately splits
-them. ponyflight_flying decides whether the wings are spread; ponyflight_flapping and
-the local Space key decide whether ppm2_fly runs the gesture. The render-time
-override below keeps the spread bodygroup selected when that gesture is off.
-
-PPM2 only re-reads SelectWingsType inside ApplyRace, and nothing calls that
-when ppm2_fly changes, so we still trigger its refresh on flap transitions.
-Neither PPM2 flag is treated as authority: both flight and flapping derive
-from PonyFlight-owned state that PPM2 never writes.
-]]
---[[
-ApplyBodygroups, not SlowUpdate, and the difference is the reset.
-
-Briefly this called data:SlowUpdate() -- the same entry point PPM2's own
-0.5s timer uses -- on the theory that copying the working timer removed the
-guesswork. It made things worse, and the diff says why:
-
-    ApplyBodygroups = ResetBodygroups() then SlowUpdate()
-    SlowUpdate      = SlowUpdate()
-
-ResetBodygroups zeroes every bodygroup and calls ResetWings
-(bodygroup_controller.moon:740-752). On the new pony model the wings are not
-only a bodygroup, so ApplyRace setting BODYGROUP_WINGS is not by itself
-enough to put them away -- the reset is what actually clears them. Dropping
-it left nothing to undo the spread wings.
-]]
+-- PPM2 couples both the flap gesture and the spread bodygroup to ppm2_fly.
+-- Split here: ponyflight_flying spreads the wings, ppm2_fly runs the gesture.
+-- ApplyBodygroups, not SlowUpdate: only ApplyBodygroups calls ResetBodygroups,
+-- and on the new pony model that reset is what actually puts the wings away.
 local function applyBodygroups(ply)
     local controller = bodygroupController(ply)
     if not controller or not isfunction(controller.ApplyBodygroups) then return end
@@ -130,11 +54,9 @@ local function applyBodygroups(ply)
     controller:ApplyBodygroups()
 end
 
--- Player bodygroups are server-networked. A clientside ApplyBodygroups can
--- therefore be correct here and still be replaced by the next snapshot of
--- the server's older value. Put back only the wing group immediately before
--- drawing; this is cheap enough to be a condition rather than another
--- cached event, and leaves every unrelated PPM/2 bodygroup alone.
+-- Player bodygroups are server-networked, so a correct clientside value can
+-- still be replaced by the next snapshot. Reassert just the wing group before
+-- drawing, leaving every unrelated PPM2 bodygroup alone.
 local function visibleWingsValue(ply, controller)
     controller = controller or bodygroupController(ply)
     if not controller or not isfunction(controller.SelectWingsType) then return end
@@ -142,9 +64,8 @@ local function visibleWingsValue(ply, controller)
     local wanted = tonumber(controller:SelectWingsType())
     if not wanted then return end
 
-    -- ppm2_fly now means "flapping", but a gliding pony still uses the
-    -- spread-wing bodygroup. SelectWingsType adds this same offset while the
-    -- PPM2 flag is true; add it ourselves only for the glide case.
+    -- SelectWingsType adds this same offset while ppm2_fly is true; add it
+    -- ourselves for the glide case, where the flag is false but wings stay open.
     local ppm2Spread = ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) or
         (isfunction(ply.GetMoveType) and ply:GetMoveType() == MOVETYPE_NOCLIP)
 
@@ -174,20 +95,8 @@ local function applyVisibleWings(ply)
     ply:SetBodygroup(group, wanted)
 end
 
---[[
-Re-asserted across a short window rather than once.
-
-The wings lagged both opening and closing. PPM2 rebuilds its bodygroups and
-merged models on its own schedule, so a single call can be undone moments
-later by a rebuild that was already in flight. Re-applying over ~0.3s means
-whichever pass lands, ours is the one after it.
-
-This does not address the round trip -- refreshing sooner cannot help when
-the flag being refreshed from has not arrived. That is the prediction below,
-which writes the flag locally so there is something true to refresh from.
-The two are complementary: prediction decides WHEN the wings should change,
-this decides that our answer is the one that survives PPM2's own rebuilds.
-]]
+-- Re-applied over ~0.3s: PPM2 rebuilds bodygroups on its own schedule, so one
+-- call can be undone by a rebuild already in flight.
 local REASSERT_AT = { 0, 0.05, 0.15, 0.3 }
 
 local function refreshWings(ply)
@@ -198,34 +107,9 @@ local function refreshWings(ply)
     end
 end
 
---[[
-Predicting our own takeoff and landing, which is what makes them instant.
-
-PPM/2's noclip is the model, and it is instant for two separate reasons.
-It refreshes on the transition rather than waiting for its own timer --
-
-    hook.Add 'PlayerNoClip', 'PPM2.WingsCheck', =>
-        timer.Simple 0, -> ... bg\SlowUpdate()      -- bodygroup_controller.moon:937
-
--- and, the half that actually matters here, the thing it refreshes FROM is
-MOVETYPE_NOCLIP, which the local player's own prediction has already changed.
-Nothing is waited on because nothing had to travel.
-
-We had the first half already, and it was never the problem. ppm2_fly is set
-by the server, so no amount of refreshing beats the round trip -- refreshing
-sooner only recomputes from a flag that has not arrived, and SelectWingsType
-reads it as still false.
-
-So the flag is written locally the moment the client can know, and the server
-is left to confirm. Both edges are honestly predictable from what the client
-already has: takeoff is the same double-tapped jump the server's KeyPress
-hook watches, and CanFly reads the race NW var; landing is OnGround, which
-for yourself is predicted, and which is the server's own landing test.
-
-Only for LocalPlayer. Everypony else's takeoff is genuinely unknowable until
-it is networked, and PPM/2's noclip is no different -- movetype has to travel
-for other players too.
-]]
+-- The server owns ppm2_fly, so no amount of refreshing beats the round trip.
+-- Write the flag locally as soon as the client can know, and let the server
+-- confirm. LocalPlayer only -- everypony else's takeoff has to travel.
 local PREDICTION_TIMEOUT = 0.5
 
 local predictedAt = nil
@@ -234,54 +118,24 @@ local predictedFlying = false
 local function predictFlying(flying)
     if not IsValid(LocalPlayer()) then return end
 
-    -- Already predicting this, so leave the window where it was. Re-arming
-    -- it every frame would hold it open forever and let a guess outlast the
-    -- server, which is the one thing a prediction must never do.
+    -- Leave the window where it was; re-arming every frame would hold it open
+    -- forever and let the guess outlast the server.
     if predictedAt and predictedFlying == flying then return end
 
     predictedAt = CurTime()
     predictedFlying = flying
 end
 
---[[
-What the wings SHOULD be, recomputed from scratch every frame.
-
-This is the part that was not matching noclip, and the part that was
-sticking. MOVETYPE_NOCLIP is not an event PPM/2 records; it is a condition
-that stays true, so every ApplyRace re-derives the answer and nothing can
-leave the wings wrong -- there is no stored state to go stale.
-
-Ours stored state. predictFlying wrote ppm2_fly once and trusted it to
-survive, and it does not, because PPM/2 writes that var clientside itself:
-
-    ModelChanges   ponydata.moon:500
-    PlayerRespawn  ponydata.moon:561
-    PlayerDeath    ponydata.moon:590     -- all @ent\SetNW2Bool('ppm2_fly', false)
-
-Every one of those shuts the wings mid-flight, and since the SERVER's copy
-never changed, it never re-sends and nothing ever puts them back. Stuck
-closed. The old reconcile could do the same in reverse -- on a slow landing
-confirmation it flipped its own guess back and wrote a stale true that the
-server would likewise never contradict. Stuck open on landing.
-
-So nothing is stored now. ponyflight_flying is the base -- it is ours, the server
-owns it, and PPM/2 has never heard of it, so nothing else writes it. The
-prediction is a bounded override on top, live only until the server catches
-up or the window lapses, so it can never outlive its usefulness or win an
-argument against the server.
-]]
+-- Recomputed every frame, never stored. PPM2 writes ppm2_fly false itself on
+-- ModelChanges, PlayerRespawn and PlayerDeath (ponydata.moon), and the server's
+-- copy never changed, so a stored guess sticks with nothing to undo it.
 wingsWanted = function(ply)
     local base = Flight.IsFlying(ply)
 
     if ply ~= LocalPlayer() or not predictedAt then return base end
 
-    -- Retiring the prediction resets the guess to reality as well as clearing
-    -- the window. Leaving predictedFlying latched at its last value is what
-    -- made a second takeoff slow: the KeyPress guard below reads it, so a
-    -- flight that ended by any route other than the ground edge -- death,
-    -- gib, vehicle, race change -- left it stuck true and silently declined
-    -- to predict ever again. That is a delay only the flier can see, because
-    -- only the flier has a prediction to lose.
+    -- Reset the guess as well as the window. Left latched, an exit by any route
+    -- other than landing sticks it true and declines to predict ever again.
     if predictedFlying == base or CurTime() - predictedAt >= PREDICTION_TIMEOUT then
         predictedAt = nil
         predictedFlying = base
@@ -291,36 +145,13 @@ wingsWanted = function(ply)
     return predictedFlying
 end
 
---[[
-Hand the prediction to the shared flight activity hook.
-
-sh_flight.lua owns CalcMainActivity now, in both realms, because a
-server-only PPM/2 fallback was straightening the legs mid-glide -- the
-reasoning is there. It reads Flight.VisualFlying, which on its own is
-just the server's answer; overriding it here is what lets the local
-pony's pose change on the same frame as their wings and their camera,
-from the same guess, rather than a round trip behind all three.
-
-Assigned rather than hooked so there is exactly one answer per realm and
-no question of which wins.
-]]
+-- Assigned rather than hooked, so there is exactly one answer per realm.
 function Flight.VisualFlying(ply)
     return wingsWanted(ply)
 end
 
---[[
-Assert the PPM2 flap flag every frame, for every pony.
-
-Cheap -- a bool compare per player, and the write and rebuild only happen on
-the frames where something has actually knocked the value off. That makes the
-correction self-healing rather than one-shot: whatever clobbers ppm2_fly, and
-there are at least four things that do, it is right again the next frame
-instead of until the next time the server happens to change its mind.
-
-This is what carries other ponies too. Their base is the networked
-ponyflight_flapping, so PPM/2 zeroing ppm2_fly while a pegasus is actively
-flapping heals in a frame, where before it could be permanent.
-]]
+-- Every frame, every pony: whatever knocks ppm2_fly off, it is right again the
+-- next frame instead of at the server's next change of mind.
 local function flappingWanted(ply, flying)
     flying = flying == nil and wingsWanted(ply) or flying
 
@@ -335,14 +166,9 @@ local function flappingWanted(ply, flying)
         flapVisual[ply] = state
     end
 
-    -- Landing and every forced flight exit still stop immediately. The
-    -- cycle completion is only for releasing Space during an active flight.
-    --
-    -- What the cycle latch is for: it lets the wing stroke in progress finish
-    -- before the wings are held. Gliding pins the flap loop at frame 0
-    -- (sh_flight.lua), and frames 0, 20 and 40 are the same pose, so a
-    -- release that lands on a stroke boundary holds without a visible snap.
-    -- One beat is one stroke, so finishing one is all it has to wait for.
+    -- Lets the stroke in progress finish before the wings are held. Frames 0, 20
+    -- and 40 are the same pose, so releasing on a boundary holds without a snap.
+    -- Landing and forced exits still stop immediately.
     if not flying then
         state.active = false
         state.stopAt = nil
@@ -350,9 +176,8 @@ local function flappingWanted(ply, flying)
         return false
     end
 
-    -- Local buttons are predicted; every other player's held state comes
-    -- from the server. Each client owns the visual latch, so network delay
-    -- cannot make a remote gesture get cut at the server's cycle boundary.
+    -- Each client owns its own latch, so network delay cannot cut a remote
+    -- gesture at the server's cycle boundary.
     local held
 
     if ply == LocalPlayer() then
@@ -379,8 +204,7 @@ local function flappingWanted(ply, flying)
             local boundary = state.startedAt + cycle * Flight.BEAT_INTERVAL
             local lateness = now - boundary
 
-            -- A normal frame lands just after the boundary. After a long
-            -- hitch, skip the stale beat rather than playing it immediately
+            -- After a hitch, skip the stale beat rather than playing it just
             -- before the next correctly phased one.
             if lateness <= math.min(Flight.BEAT_INTERVAL * 0.25, 0.1) then
                 ply:EmitSound(
@@ -425,16 +249,14 @@ local function enforceWings(ply)
     return flying, wanted
 end
 
--- The same double tap sv_flight.lua's KeyPress hook watches, on the same
--- terms, so the two sides reach the same answer from the same inputs rather
--- than one guessing at the other.
+-- The same double tap sv_flight.lua watches, on the same terms, so both sides
+-- reach the same answer from the same inputs.
 local lastJump = 0
 
 hook.Add("KeyPress", "PonyFlight.PredictTakeoff", function(ply, key)
     if ply ~= LocalPlayer() then return end
     if key ~= IN_JUMP then return end
-    -- Only an ACTIVE prediction blocks a new one. Testing predictedFlying on
-    -- its own tested a stale guess and refused to predict at all.
+    -- Only an active prediction blocks a new one; predictedFlying alone is stale.
     if Flight.IsFlying(ply) or (predictedAt and predictedFlying) then return end
     if not Flight.CanFly(ply) then return end
 
@@ -464,17 +286,13 @@ local function updateLean(ply, flapping)
 
         local forwardVelocity = direction:Dot(facing:Forward())
 
-        -- Forward pitch is the powered-flight pose and relaxes while gliding.
-        -- Backward travel always pitches the other way, so reversing never
-        -- reads as another forward lean. The sign matches the pony rig:
-        -- negative pitch is nose-forward, positive is rump-forward.
+        -- On the pony rig, negative pitch is nose-forward, positive rump-forward.
         if forwardVelocity < 0 or flapping then
             targetPitch = math.Clamp(-forwardVelocity * MAX_PITCH, -MAX_PITCH, MAX_PITCH)
         end
 
-        -- Bank into sideways travel. Dotting against the facing's right axis
-        -- means the roll reads as leaning into the turn rather than reacting
-        -- a tick late to the key you pressed.
+        -- Dotted against the facing's right axis, so the roll leans into the turn
+        -- rather than reacting a tick late to the key.
         targetRoll = math.Clamp(direction:Dot(facing:Right()) * MAX_ROLL * ROLL_GAIN, -MAX_ROLL, MAX_ROLL)
 
         -- Ease the lean in with speed so a slow hover does not list.
@@ -514,17 +332,9 @@ hook.Add("Think", "PonyFlight.Presentation", function()
     if IsValid(localPly) then
         local flying = Flight.IsFlying(localPly)
 
-        -- Landing is the server's own exit test -- sv_flight.lua's FinishMove
-        -- stops flight on OnGround and nothing else -- and OnGround for
-        -- yourself is predicted, so the client reaches that answer at the same
-        -- instant rather than being told about it a round trip later.
-        --
-        -- On the edge, like PlayerNoClip, not on the condition. Landing is one
-        -- moment; predicting it again every frame we remain stood there would
-        -- keep re-arming the window against a server that has not agreed yet.
-        --
-        -- Resolved before the camera below, so the camera acts on this frame's
-        -- prediction rather than last frame's.
+        -- OnGround is the server's only exit test and is predicted for yourself.
+        -- On the edge, not the condition: staying grounded would keep re-arming
+        -- the window. Resolved before the camera, which reads it this frame.
         local onGround = localPly:OnGround()
 
         if onGround and not wasOnGround and (flying or (predictedAt and predictedFlying)) then
@@ -533,20 +343,9 @@ hook.Add("Think", "PonyFlight.Presentation", function()
 
         wasOnGround = onGround
 
-        --[[
-        The camera swings on the predicted state, not the server's.
-
-        This is the other half of a delay only the flier sees, and the larger
-        half: in first person there are no wings on screen to be quick about.
-        Whatever the bodygroup does, you cannot see your own pony until the
-        third person camera has pulled out, so gating that on the un-predicted
-        ponyflight_flying spent the whole round trip before the flight became
-        visible at all -- while everypony else, already looking at you, saw
-        the wings open immediately.
-
-        Predicting the wings and not the camera meant the one pony who could
-        not benefit from the prediction was the one it was for.
-        ]]
+        -- On the predicted state too: in first person the camera pulling out
+        -- is the whole visible takeoff, so leaving it on the server's answer
+        -- spent the round trip for the one pony the prediction was for.
         local shown = wingsWanted(localPly)
 
         if shown ~= wasFlying then
@@ -564,9 +363,8 @@ hook.Add("Think", "PonyFlight.Presentation", function()
             local state = updateLean(ply, flapping)
 
             if RENDER_ANGLES_MOVE_ATTACHMENTS then
-                -- Set here rather than in a draw hook so PPM2's PrePlayerDraw,
-                -- which runs at priority -2 and places the cutie mark, reads
-                -- this frame's value instead of last frame's.
+                -- Before PPM2's PrePlayerDraw (priority -2, places the cutie mark),
+                -- so it reads this frame's value.
                 local angles = ply:GetRenderAngles()
                 ply.ponyFlightRenderAngles = ply.ponyFlightRenderAngles or angles
                 ply:SetRenderAngles(Angle(state.pitch, angles.y, state.roll))
@@ -577,22 +375,13 @@ hook.Add("Think", "PonyFlight.Presentation", function()
     end
 end)
 
---[[
-Bone lean. Reads the state Think already computed; deliberately does not
-advance it, because this hook runs once per render pass and the smoothing
-must only step once per frame.
-
-ManipulateBoneAngles takes an offset in the bone's local space, so the
-world-space lean is conjugated into it as M^-1 * R * M against the bone's
-world rotation. Deriving that beats guessing which way the rig's local axes
-happen to point.
-]]
+-- ManipulateBoneAngles takes an offset in the bone's local space, so the world
+-- lean is conjugated in as M^-1 * R * M. Think advances the smoothing, not this.
 hook.Add("PPM2.SetupBones", "PonyFlight.Lean", function(ply)
     if not IsValid(ply) or not ply:IsPlayer() then return end
 
-    -- PPM2 calls SetupBones from its PrePlayerDraw, after ordinary entity
-    -- networking has had its chance to restore the server's stale bodygroup.
-    -- Correcting here makes the predicted value the one this render uses.
+    -- After entity networking has restored the server's stale bodygroup, so the
+    -- correction here is what this render uses.
     applyVisibleWings(ply)
 
     local state = lean[ply]
@@ -624,9 +413,7 @@ hook.Add("EntityRemoved", "PonyFlight.Cleanup", function(ent)
     flapVisual[ent] = nil
 end)
 
--- Exposed for cl_flightdebug.lua. The prediction is two file-locals, and the
--- one question worth asking is whether they are live at the moment the wings
--- are wrong -- which is not answerable from outside without this.
+-- Exposed for cl_flightdebug.lua; the prediction is otherwise two file-locals.
 function Flight.DebugPrediction()
     return predictedAt, predictedFlying
 end

@@ -1,34 +1,12 @@
---[[
-PonyFlight -- server authority.
-
-Owns who is flying and why they stopped. Activation is double-tapped Space
-in midair, per design; there is deliberately no takeoff windup yet, since
-whether flight even needs one is a question for playtest rather than for
-this file. When that answer arrives it belongs here, between the double-tap
-and Flight.Start.
-
-Collisions stay lethal. A pegasus who flies into a wall at speed should hurt
-themselves, and at real speed should come apart. This is the one place the
-spec's 75 HP works in our favour: it makes the number small enough that the
-damage curve does not need to be vicious to be funny.
-]]
-
 local Flight = PonyFlight
 
--- Clients need the wingbeats even if they never subscribed to the addon.
 for _, path in ipairs(Flight.WINGBEATS) do
     resource.AddSingleFile("sound/" .. path)
 end
 
---[[
-Impact damage.
-
-Detected by watching how much speed vanished in a single tick. The engine's
-TryPlayerMove kills the component of velocity going into whatever you hit,
-so a wall at 700 shows up as a ~700 drop in one tick, while ordinary flying
-never loses more than acceleration allows. That makes the delta itself the
-impact strength, with no trace of our own.
-]]
+-- TryPlayerMove kills the velocity component going into whatever you hit, so
+-- a wall shows up as a one-tick speed drop. The delta is the impact strength;
+-- ordinary flying never loses more than acceleration allows.
 Flight.IMPACT_FLOOR = 320   -- below this it is flying, not crashing
 Flight.GIB_SPEED = 900      -- above this you do not land, you arrive
 
@@ -94,15 +72,8 @@ function Flight.Stop(ply, reason)
     hook.Run("PonyFlight_Changed", ply, false, reason)
 end
 
---[[
-Double-tap Space to take off: the ground jump is tap one and the airborne
-press is tap two. A standing start therefore still costs a jump, which is
-the only brake on takeoff until playtest says whether it needs a real one.
-
-There is deliberately no air-toggle to land: descending and touching down is
-the only way out. That makes landing something you fly rather than a key you
-press, and it keeps Space unambiguous in the air, where it is the climb.
-]]
+-- The ground jump is tap one, the airborne press is tap two. No air-toggle to
+-- land: descending and touching down is the only way out.
 hook.Add("KeyPress", "PonyFlight.Takeoff", function(ply, key)
     if key ~= IN_JUMP then return end
     if Flight.IsFlying(ply) then return end
@@ -110,10 +81,7 @@ hook.Add("KeyPress", "PonyFlight.Takeoff", function(ply, key)
 
     local last = ply.ponyFlightLastJump or 0
 
-    -- The ordinary ground jump is tap one. Flight may only begin once the
-    -- pony is airborne, but throwing that first press away made takeoff need
-    -- a third tap. KeyPress fires at the start of the second press, so keeping
-    -- Space held after it also feeds lift to the Move hook immediately.
+    -- Discarding the ground jump made takeoff need a third tap.
     if not ply:OnGround() and CurTime() - last <= Flight.DOUBLE_TAP then
         ply.ponyFlightLastJump = 0
         Flight.Start(ply)
@@ -122,13 +90,8 @@ hook.Add("KeyPress", "PonyFlight.Takeoff", function(ply, key)
     end
 end)
 
---[[
-Per-move upkeep: impact detection and flap-input replication.
-
-FinishMove rather than Think because it runs once per processed move with
-the post-collision velocity already resolved, which is exactly the number
-the impact check wants.
-]]
+-- FinishMove, not Think: it runs once per processed move with the
+-- post-collision velocity already resolved, which is what the impact check wants.
 hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
     if not Flight.IsFlying(ply) then return end
 
@@ -176,15 +139,8 @@ end)
 hook.Add("PlayerDeath", "PonyFlight.Death", function(ply) Flight.Stop(ply, "died") end)
 hook.Add("PlayerSpawn", "PonyFlight.Spawn", function(ply) Flight.Stop(ply, "spawned") end)
 hook.Add("PlayerEnteredVehicle", "PonyFlight.Vehicle", function(ply) Flight.Stop(ply, "vehicle") end)
---[[
-Eligibility can stop being true underneath a pony in mid-air -- a race
-change, a job change, whatever the host gates on. PonyFlight cannot know
-what those events are, so it exposes the recheck and the host calls it.
-
-The PPM/2 hook below covers the default provider, so a standalone install
-still grounds a pegasus who becomes an earth pony without anypony wiring
-anything up.
-]]
+-- Hosts call this when their own answer to CanFly changes. The PPM2 hook below
+-- covers the default provider.
 function Flight.Recheck(ply)
     if not IsValid(ply) then return end
     if not ply:GetNWBool(Flight.NW_VAR, false) then return end

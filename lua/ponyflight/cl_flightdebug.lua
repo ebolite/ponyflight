@@ -1,36 +1,3 @@
---[[
-PonyFlight diagnostics -- client side.
-
-Four seconds of delay, variable, no traceback. That figure is the reason this
-file exists: every explanation on the table predicts half a second at worst,
-because PPM/2's own SlowUpdate timer (hooks.moon:84, 0.5s on the client)
-re-derives the wings from ppm2_fly on its own and would heal anything slower
-than that with none of our code involved. Four seconds means ppm2_fly itself
-is false for four seconds, or the thing reading it is not running.
-
-So this watches every link in the chain at once and prints only when one of
-them changes, with the gap since the last change. Whichever column moves late
-is the broken link, and the gaps say how late:
-
-    flying     ponyflight_flying, the server's answer and what we derive from
-    ppm2       ppm2_fly, now the flap gesture flag
-    flap       the server-owned ponyflight_flapping state
-    pred       our prediction, and whether its window is still live
-    want       what wingsWanted() decided this frame
-    wings      the bodygroup actually on the model right now
-    expect     the bodygroup PonyFlight will enforce (spread even while gliding)
-    gesture    isPlayingPPM2Anim; now follows flight, not the flap flag
-    move       movetype, for comparison against noclip
-
-Read it against the two known-good references. Noclip flips move and gesture
-together with no server involved. Base PPM/2 flight flips ppm2 inside a
-predicted SetupMove and kicks the bodygroup through PlayerNoClip.
-
-    ponyflight_watch          watch yourself
-    ponyflight_watch <name>   watch somepony else, for the client/server split
-    ponyflight_watch_stop
-]]
-
 local Flight = PonyFlight
 
 local watching = nil
