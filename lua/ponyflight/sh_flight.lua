@@ -9,6 +9,21 @@ Flight.FLAP_NW_VAR = "ponyflight_flapping"
 -- PPM2's own flag. We drive it; it reads this for the pose and wings.
 Flight.PPM2_NW_VAR = "ppm2_fly"
 
+Flight.FORCE_THIRDPERSON_VAR = "ponyflight_forcethirdperson"
+
+-- Server-created only. A replicated convar reaches the client on its own, and
+-- creating it on both sides is what GMod tells you not to do
+if SERVER then
+    CreateConVar(Flight.FORCE_THIRDPERSON_VAR, "0",
+        bit.bor(FCVAR_REPLICATED, FCVAR_NOTIFY),
+        "Force third person while flying, and hold players in it")
+end
+
+function Flight.ForcesThirdPerson()
+    local convar = GetConVar(Flight.FORCE_THIRDPERSON_VAR)
+    return convar ~= nil and convar:GetBool()
+end
+
 -- Speeds in hu/s: land speed is ~200 walking, ~400 running
 Flight.SPEED = 650          -- base horizontal flight speed
 Flight.CLIMB_SPEED = 420    -- lift target, not achieved climb -- gravity takes most of it

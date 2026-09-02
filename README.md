@@ -30,6 +30,18 @@ Since flight movement is predicted, you need to read the actual networked state 
 
 If CanFly changes mid-flight, call `PonyFlight.Recheck(ply)`.
 
+## ConVars
+
+| ConVar | Realm | Default | |
+| --- | --- | --- | --- |
+| `ponyflight_enterthirdperson` | client | `1` | Switch to third person while flying |
+| `ponyflight_forcethirdperson` | server, replicated | `0` | Force third person while flying, and hold players in it |
+
+With Simple ThirdPerson installed we switch its view on rather than running our
+own camera, so the player keeps the distance and smoothing they already tuned.
+Either way we hold them in third person for the flight and put the setting back
+on landing.
+
 ## Hooks
 
 | Hook | Fired when |

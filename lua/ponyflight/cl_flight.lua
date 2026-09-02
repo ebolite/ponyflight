@@ -2,6 +2,14 @@ local Flight = PonyFlight
 
 local THIRDPERSON_VAR = "simple_thirdperson_enabled"
 
+local ENTER_THIRDPERSON = CreateClientConVar("ponyflight_enterthirdperson", "1",
+    true, false, "Switch to third person while flying")
+
+-- The server's answer wins, so a server that forces it overrides the preference
+local function wantsThirdPerson()
+    return Flight.ForcesThirdPerson() or ENTER_THIRDPERSON:GetBool()
+end
+
 -- Our own flight camera, so we do not depend on Simple ThirdPerson
 local CAMERA_DIST = 110
 local CAMERA_HEIGHT = 12
@@ -38,12 +46,12 @@ local function simpleThirdPerson()
     return GetConVar(THIRDPERSON_VAR)
 end
 
--- Only sampled at takeoff, so toggling it mid-flight is left alone
 local function useSimpleThirdPerson(flying)
     local convar = simpleThirdPerson()
     if not convar then return end
 
     if flying then
+        if not wantsThirdPerson() then return end
         if convar:GetBool() then return end
         weTurnedItOn = true
         RunConsoleCommand(THIRDPERSON_VAR, "1")
@@ -51,6 +59,16 @@ local function useSimpleThirdPerson(flying)
         weTurnedItOn = false
         RunConsoleCommand(THIRDPERSON_VAR, "0")
     end
+end
+
+-- Simple ThirdPerson has its own bind, so a player can turn it off underneath us
+-- mid-flight and end up in first person with a camera we are not driving
+local function holdSimpleThirdPerson()
+    local convar = simpleThirdPerson()
+    if not convar or convar:GetBool() then return end
+    if not wantsThirdPerson() then return end
+
+    RunConsoleCommand(THIRDPERSON_VAR, "1")
 end
 
 local function applyBodygroups(ply)
@@ -317,6 +335,8 @@ hook.Add("Think", "PonyFlight.Presentation", function()
         if shown ~= wasFlying then
             wasFlying = shown
             useSimpleThirdPerson(shown)
+        elseif shown then
+            holdSimpleThirdPerson()
         end
     end
 
@@ -395,6 +415,7 @@ end
 -- Pulled in on whatever it hits so the view never ends up inside geometry
 hook.Add("CalcView", "PonyFlight.Camera", function(ply, origin, angles, fov)
     if simpleThirdPerson() then return end
+    if not wantsThirdPerson() then return end
     if not Flight.VisualFlying(ply) then return end
 
     local eyes = ply:EyePos()
