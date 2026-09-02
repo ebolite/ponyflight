@@ -14,9 +14,7 @@ local function controllerFor(ply)
     return data:GetBodygroupController()
 end
 
--- What PPM/2 would put on the model if something asked it right now. The gap
--- between this and the actual bodygroup is the whole question: equal means
--- nothing is refreshing, different means the refresh is running and losing.
+-- What PPM/2 would put on the model if something asked it right now
 local function expectedWings(ply)
     if not isfunction(Flight.DebugVisibleWingsWanted) then return -1 end
 
@@ -28,8 +26,7 @@ local function actualWings(ply)
     local controller = controllerFor(ply)
     if not controller then return -1 end
 
-    -- PPM2.BODYGROUP_WINGS is the old-model default (3). The new pony
-    -- controller uses 2, so reading the global reports an unrelated group.
+    -- PPM2.BODYGROUP_WINGS old: 3 new: 2
     local class = controller.__class
     local group = tonumber(class and class.BODYGROUP_WINGS or controller.BODYGROUP_WINGS)
     if not group or group < 0 then return -1 end
@@ -93,8 +90,6 @@ hook.Add("Think", "PonyFlight.Debug", function()
         flag(shot.want),
         shot.wings,
         shot.expect,
-        -- The loud case: PPM/2 already knows the answer and the model has not
-        -- been told, which means nothing is calling ApplyRace.
         shot.wings ~= shot.expect and "MISMATCH" or "        ",
         flag(shot.gesture),
         shot.move))

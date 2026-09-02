@@ -4,15 +4,12 @@ for _, path in ipairs(Flight.WINGBEATS) do
     resource.AddSingleFile("sound/" .. path)
 end
 
--- TryPlayerMove kills the velocity component going into whatever you hit, so
--- a wall shows up as a one-tick speed drop. The delta is the impact strength;
--- ordinary flying never loses more than acceleration allows.
-Flight.IMPACT_FLOOR = 320   -- below this it is flying, not crashing
-Flight.GIB_SPEED = 900      -- above this you do not land, you arrive
+-- We get the impact speed from the difference between our current speed and last tick's speed.
+Flight.IMPACT_FLOOR = 320   -- we don't damage below this
+Flight.GIB_SPEED = 900      -- explode
 
 local function impactDamage(speed)
-    -- Quadratic so gentle bumps are survivable and real speed is not.
-    -- 400 -> ~6, 600 -> ~25, 800 -> ~57, 900+ -> gib.
+    -- Damage is quadratic so low speed collisions don't destroy you
     local over = (speed - Flight.IMPACT_FLOOR) / 100
     return math.Clamp(over * over * 4, 1, 200)
 end
@@ -48,12 +45,11 @@ function Flight.Start(ply)
 
     ply:SetNWBool(Flight.NW_VAR, true)
 
-    -- Takeoff happens on a Space press, so its first flap starts immediately.
-    -- Subsequent FinishMove calls keep this paired to the held key.
+    -- First flap starts immediately
     setFlapping(ply, true)
 
-    -- Gravity remains active: holding Space supplies lift, while releasing it
-    -- lets the pony lose altitude naturally.
+    -- Gravity remains active
+    -- Flight lift acts against it
     ply:SetGravity(1)
     ply.ponyFlightLastSpeed = ply:GetVelocity():Length()
 
@@ -72,8 +68,6 @@ function Flight.Stop(ply, reason)
     hook.Run("PonyFlight_Changed", ply, false, reason)
 end
 
--- The ground jump is tap one, the airborne press is tap two. No air-toggle to
--- land: descending and touching down is the only way out.
 hook.Add("KeyPress", "PonyFlight.Takeoff", function(ply, key)
     if key ~= IN_JUMP then return end
     if Flight.IsFlying(ply) then return end
@@ -90,8 +84,7 @@ hook.Add("KeyPress", "PonyFlight.Takeoff", function(ply, key)
     end
 end)
 
--- FinishMove, not Think: it runs once per processed move with the
--- post-collision velocity already resolved, which is what the impact check wants.
+-- FinishMove runs once per processed move, so we hook there instead of Think
 hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
     if not Flight.IsFlying(ply) then return end
 
@@ -123,22 +116,20 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
         return
     end
 
-    -- Landing ends flight. Descending with Ctrl until you touch down is the
-    -- intended way to stop, so there is no separate land command.
+    -- Landing ends flight
     if ply:OnGround() then
         Flight.Stop(ply, "landed")
         return
     end
 
-    -- Clients play the sound on their locally rendered gesture boundaries,
-    -- so prediction and network delay cannot separate audio from animation.
     setFlapping(ply, mv:KeyDown(IN_JUMP))
 end)
 
--- Everything else that should ground a pony.
+-- Everything else that should ground a pony
 hook.Add("PlayerDeath", "PonyFlight.Death", function(ply) Flight.Stop(ply, "died") end)
 hook.Add("PlayerSpawn", "PonyFlight.Spawn", function(ply) Flight.Stop(ply, "spawned") end)
 hook.Add("PlayerEnteredVehicle", "PonyFlight.Vehicle", function(ply) Flight.Stop(ply, "vehicle") end)
+hook.Add("PlayerNoClip", "PonyFlight.NoClip", function(ply) Flight.Stop(ply, "noclip") end)
 -- Hosts call this when their own answer to CanFly changes. The PPM2 hook below
 -- covers the default provider.
 function Flight.Recheck(ply)

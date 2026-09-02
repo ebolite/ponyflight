@@ -9,22 +9,19 @@ Flight.FLAP_NW_VAR = "ponyflight_flapping"
 -- PPM2's own flag. We drive it; it reads this for the pose and wings.
 Flight.PPM2_NW_VAR = "ppm2_fly"
 
--- Speeds are hu/s: land speed is ~200 walking, ~400 running.
-Flight.SPEED = 650          -- horizontal cruise at flightSpeedMult 1
-Flight.CLIMB_SPEED = 420    -- Space, "fast and vertical"
+-- Speeds in hu/s: land speed is ~200 walking, ~400 running
+Flight.SPEED = 650          -- base horizontal flight speed
+Flight.CLIMB_SPEED = 420    -- base vertical climb speed
 Flight.DIVE_SPEED = 780     -- Ctrl, faster than climbing because gravity helps
-Flight.ACCEL = 900          -- hu/s^2 toward the wished velocity
-Flight.GLIDE_DRAG = 0.55    -- per second decay when no input; low, so momentum carries
-Flight.SINK = 55            -- passive sink when not climbing, so altitude costs flaps
-Flight.DOUBLE_TAP = 0.32    -- seconds between the two Space presses
-Flight.BEAT_VOLUME = 0.3
+Flight.ACCEL = 900          -- in hu/s^2
+Flight.GLIDE_DRAG = 0.55    -- per second decay
+Flight.SINK = 55            -- passive sink when not climbing
+Flight.DOUBLE_TAP = 0.32    -- seconds allowed between the two Space presses
+Flight.BEAT_VOLUME = 0.3    -- volume of the wingbeat sfx
 
--- Measured off player_default_base_new.mdl seq[1]: wing_open_l repeats
--- every 20 frames of a 30fps loop. Not SequenceDuration -- the flap is a
--- gesture layer, so the player's own sequence table cannot see it.
+-- wing_open_l repeats every 20 frames
+-- the flap is a gesture, so we can't read it from the player sequence table
 Flight.BEAT_INTERVAL = 2 / 3  -- one wingbeat: 20 frames of the 30fps flap loop
-Flight.FLAP_CYCLE_BEATS = 1   -- releasing Space finishes the stroke in progress
-Flight.FLAP_CYCLE = Flight.BEAT_INTERVAL * Flight.FLAP_CYCLE_BEATS
 
 Flight.WINGBEATS = {
     "ponyflight/wingbeat1.wav",
@@ -32,13 +29,6 @@ Flight.WINGBEATS = {
     "ponyflight/wingbeat3.wav",
     "ponyflight/wingbeat4.wav",
     "ponyflight/wingbeat5.wav",
-}
-
--- Providers are asked in both realms, because the move is predicted. A
--- provider reading server-only state will rubber-band.
-local FLYING_RACES = {
-    PEGASUS = true,
-    ALICORN = true,
 }
 
 local function ppm2Race(ply)
@@ -53,7 +43,7 @@ end
 local DEFAULT_PROVIDER = {
     CanFly = function(ply)
         local race = ppm2Race(ply)
-        return race ~= nil and FLYING_RACES[race] == true
+        return race == "PEGASUS" or race == "ALICORN"
     end,
     SpeedMult = function() return 1 end,
     VerticalSpeedMult = function() return 1 end,
@@ -112,6 +102,7 @@ function Flight.CanFly(ply)
     if not IsValid(ply) or not ply:Alive() then return false end
     if ply:InVehicle() then return false end
     if ply:WaterLevel() > 0 then return false end
+    if ply:GetMoveType() == MOVETYPE_NOCLIP then return false end
 
     return activeProvider.CanFly(ply) == true
 end
@@ -133,8 +124,7 @@ function Flight.VerticalSpeedMult(ply)
     return tonumber(activeProvider.VerticalSpeedMult(ply)) or 1
 end
 
--- ppm2_sv_flight only guards SetupMove; Move and FinishMove gate on the
--- ppm2_fly bool alone, so the hooks have to go too. Both realms.
+-- Remove all the PPM2 flight hooks, since we replace the system entirely
 local function neuterPPM2Flight()
     hook.Remove("SetupMove", "PPM2.Ponyfly")
     hook.Remove("Move", "PPM2.Ponyfly")
@@ -148,7 +138,7 @@ local function neuterPPM2Flight()
     end
 end
 
--- A tick later too: removing a hook PPM2 has not added yet does nothing.
+-- We wait a tick for PPM2 to actually add the hooks to avoid a race
 local function neuterPPM2FlightSoon()
     neuterPPM2Flight()
     timer.Simple(0, neuterPPM2Flight)
@@ -158,8 +148,7 @@ neuterPPM2FlightSoon()
 hook.Add("InitPostEntity", "PonyFlight.NeuterPPM2", neuterPPM2FlightSoon)
 hook.Add("OnReloaded", "PonyFlight.NeuterPPM2", neuterPPM2FlightSoon)
 
--- PPM2 returns a 370 sequence override here; 370 is ACT_HEADBOB, not a
--- flight sequence. Return what noclip returns and the gesture is the pose.
+-- Reading the animation sequence from PPM2 returns 370 (a head bob) here for some reason, so we just take the noclip pose
 function Flight.VisualFlying(ply)
     return Flight.IsFlying(ply)
 end
@@ -169,8 +158,6 @@ hook.Add("CalcMainActivity", "PonyFlight.Activity", function(ply)
     local isNewPony = not isfunction(ply.IsNewPonyCached) or ply:IsNewPonyCached()
 
     if not flying or not isNewPony then
-        -- PPM2's flag too, so a gesture it started before our hook removal
-        -- landed gets cleaned up rather than left running.
         if not ply.ponyFlightActivity and not ply.isPlayingPPM2Anim then return end
 
         ply.ponyFlightActivity = nil
@@ -181,9 +168,8 @@ hook.Add("CalcMainActivity", "PonyFlight.Activity", function(ply)
         return
     end
 
-    -- Restarting sets the cycle to 0, so restarting every frame while not
-    -- flapping pins the loop there -- which is where the wings sit open.
-    -- AnimSetGestureCycle does not hold; the layer advances past it.
+    -- We restart the flap gesture every frame to get the open wings, since it's frame 0 of the gesture
+    -- Gestures are hard to control finely, but we can kind of hack it with this.
     local flapping = ply:GetNW2Bool(Flight.PPM2_NW_VAR, false)
 
     if not ply.ponyFlightActivity or not ply.isPlayingPPM2Anim or not flapping then
@@ -192,17 +178,19 @@ hook.Add("CalcMainActivity", "PonyFlight.Activity", function(ply)
         ply:AnimRestartGesture(GESTURE_SLOT_CUSTOM, ACT_GMOD_NOCLIP_LAYER, false)
     end
 
-    -- Whole flight, not just while flapping. SetIK is clientside-only.
+    -- Disable IK during flight (IK is client-only)
     if CLIENT then ply:SetIK(false) end
 
     -- -1 is the base gamemode's "leave the sequence alone" sentinel.
     return ACT_MP_STAND_IDLE, -1
 end)
 
--- Returns nothing, not true: the engine's own movement runs afterwards with
--- the velocity set here, which is what gives real collision and sliding.
+-- Set the movement vectors for the engine to read during its movement
+-- As opposed to PPM/2's flight, ours actually lets the engine move the pony and determine collisions/sliding
+-- VisualFlying, not IsFlying: the networked flag takes a round trip, and the
+-- client would spend it not climbing while the server already is
 hook.Add("Move", "PonyFlight.Move", function(ply, mv)
-    if not Flight.IsFlying(ply) then return end
+    if not Flight.VisualFlying(ply) then return end
 
     local mult = Flight.SpeedMult(ply)
     local verticalMult = Flight.VerticalSpeedMult(ply)
@@ -210,7 +198,7 @@ hook.Add("Move", "PonyFlight.Move", function(ply, mv)
     local vel = mv:GetVelocity()
     local dt = FrameTime()
 
-    -- Flattened, so looking down aims the dive rather than killing forward speed.
+    -- Flatten the vector so we aim descent rather than killing our speed
     local wish = Vector(0, 0, 0)
     local forward = ang:Forward()
     local right = ang:Right()

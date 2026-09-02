@@ -2,20 +2,24 @@ local Flight = PonyFlight
 
 local THIRDPERSON_VAR = "simple_thirdperson_enabled"
 
--- Lean limits, degrees.
+-- Our own flight camera, so we do not depend on Simple ThirdPerson
+local CAMERA_DIST = 110
+local CAMERA_HEIGHT = 12
+local CAMERA_HULL = 8
+
+-- Lean limits in degrees
 local MAX_PITCH = 17
 local MAX_ROLL = 21
 local ROLL_GAIN = 1.6
 local LEAN_RESPONSE = 6     -- exponential approach per second
 
--- Bones drive the lean. Setting render angles as well rotates PPM2's
--- bonemerged pieces twice, about two different pivots, and they drift.
+-- We drive the bones for leaning, so moving render angles rotates PPM's bonemerged pieces twice
 local RENDER_ANGLES_MOVE_ATTACHMENTS = false
 
 local lean = {}
 local wingState = {}
 local flapVisual = {}
-local weTurnedItOn = false
+local suspendedSimpleThirdPerson = false
 local wingsWanted
 
 local function bodygroupController(ply)
@@ -27,26 +31,23 @@ local function bodygroupController(ply)
     return data:GetBodygroupController()
 end
 
--- Simple ThirdPerson (207948202) owns the camera; we only flip its convar, so
--- the player keeps their own distance and smoothing. Restored only if we set it.
-local function setThirdPerson(enabled)
+-- We run our own camera during flight, so Simple ThirdPerson (207948202) has to
+-- stand down while we do -- both of us drive CalcView and they would fight.
+-- Only sampled at takeoff, so toggling it mid-flight is left alone.
+local function suspendSimpleThirdPerson(flying)
     local convar = GetConVar(THIRDPERSON_VAR)
     if not convar then return end
 
-    if enabled then
-        if convar:GetBool() then return end
-        weTurnedItOn = true
-        RunConsoleCommand(THIRDPERSON_VAR, "1")
-    elseif weTurnedItOn then
-        weTurnedItOn = false
+    if flying then
+        if not convar:GetBool() then return end
+        suspendedSimpleThirdPerson = true
         RunConsoleCommand(THIRDPERSON_VAR, "0")
+    elseif suspendedSimpleThirdPerson then
+        suspendedSimpleThirdPerson = false
+        RunConsoleCommand(THIRDPERSON_VAR, "1")
     end
 end
 
--- PPM2 couples both the flap gesture and the spread bodygroup to ppm2_fly.
--- Split here: ponyflight_flying spreads the wings, ppm2_fly runs the gesture.
--- ApplyBodygroups, not SlowUpdate: only ApplyBodygroups calls ResetBodygroups,
--- and on the new pony model that reset is what actually puts the wings away.
 local function applyBodygroups(ply)
     local controller = bodygroupController(ply)
     if not controller or not isfunction(controller.ApplyBodygroups) then return end
@@ -54,9 +55,8 @@ local function applyBodygroups(ply)
     controller:ApplyBodygroups()
 end
 
--- Player bodygroups are server-networked, so a correct clientside value can
--- still be replaced by the next snapshot. Reassert just the wing group before
--- drawing, leaving every unrelated PPM2 bodygroup alone.
+-- Reassert only the wing group before drawing, since other bodygroups are server-networked.
+-- We just predict wing state locally.
 local function visibleWingsValue(ply, controller)
     controller = controller or bodygroupController(ply)
     if not controller or not isfunction(controller.SelectWingsType) then return end
@@ -64,8 +64,7 @@ local function visibleWingsValue(ply, controller)
     local wanted = tonumber(controller:SelectWingsType())
     if not wanted then return end
 
-    -- SelectWingsType adds this same offset while ppm2_fly is true; add it
-    -- ourselves for the glide case, where the flag is false but wings stay open.
+    -- Get the offset ppm2_fly uses, and add it ourselves for gliding so the wings stay open without flapping
     local ppm2Spread = ply:GetNW2Bool(Flight.PPM2_NW_VAR, false) or
         (isfunction(ply.GetMoveType) and ply:GetMoveType() == MOVETYPE_NOCLIP)
 
@@ -95,8 +94,8 @@ local function applyVisibleWings(ply)
     ply:SetBodygroup(group, wanted)
 end
 
--- Re-applied over ~0.3s: PPM2 rebuilds bodygroups on its own schedule, so one
--- call can be undone by a rebuild already in flight.
+-- We reassert multiple times, because PPM2 often rebuilds bodygroups.
+-- If we call just once, it can be overwritten by a PPM2 rebuild mid-flight.
 local REASSERT_AT = { 0, 0.05, 0.15, 0.3 }
 
 local function refreshWings(ply)
@@ -107,9 +106,7 @@ local function refreshWings(ply)
     end
 end
 
--- The server owns ppm2_fly, so no amount of refreshing beats the round trip.
--- Write the flag locally as soon as the client can know, and let the server
--- confirm. LocalPlayer only -- everypony else's takeoff has to travel.
+-- Timeout here, how long we allow the client prediction to play on its own w/o server confirmation
 local PREDICTION_TIMEOUT = 0.5
 
 local predictedAt = nil
@@ -118,24 +115,22 @@ local predictedFlying = false
 local function predictFlying(flying)
     if not IsValid(LocalPlayer()) then return end
 
-    -- Leave the window where it was; re-arming every frame would hold it open
-    -- forever and let the guess outlast the server.
+    -- Return early so we don't reset the fly animation every frame
     if predictedAt and predictedFlying == flying then return end
 
     predictedAt = CurTime()
     predictedFlying = flying
 end
 
--- Recomputed every frame, never stored. PPM2 writes ppm2_fly false itself on
--- ModelChanges, PlayerRespawn and PlayerDeath (ponydata.moon), and the server's
--- copy never changed, so a stored guess sticks with nothing to undo it.
+-- We recompute this every frame sort of as a brute force method to make sure
+-- no weird stuff happens between PPM2 rebuilds, model changes, whatever.
+-- Storing the prediction made a lot of flickering happened.
+-- Still kind of janky, but whatever, it works lol
 wingsWanted = function(ply)
     local base = Flight.IsFlying(ply)
 
     if ply ~= LocalPlayer() or not predictedAt then return base end
 
-    -- Reset the guess as well as the window. Left latched, an exit by any route
-    -- other than landing sticks it true and declines to predict ever again.
     if predictedFlying == base or CurTime() - predictedAt >= PREDICTION_TIMEOUT then
         predictedAt = nil
         predictedFlying = base
@@ -145,13 +140,11 @@ wingsWanted = function(ply)
     return predictedFlying
 end
 
--- Assigned rather than hooked, so there is exactly one answer per realm.
 function Flight.VisualFlying(ply)
     return wingsWanted(ply)
 end
 
--- Every frame, every pony: whatever knocks ppm2_fly off, it is right again the
--- next frame instead of at the server's next change of mind.
+-- Computed every frame for the same reasoning as wingsWanted above
 local function flappingWanted(ply, flying)
     flying = flying == nil and wingsWanted(ply) or flying
 
@@ -160,24 +153,17 @@ local function flappingWanted(ply, flying)
         state = {
             active = false,
             startedAt = 0,
-            stopAt = nil,
             nextBeatAt = nil
         }
         flapVisual[ply] = state
     end
 
-    -- Lets the stroke in progress finish before the wings are held. Frames 0, 20
-    -- and 40 are the same pose, so releasing on a boundary holds without a snap.
-    -- Landing and forced exits still stop immediately.
     if not flying then
         state.active = false
-        state.stopAt = nil
         state.nextBeatAt = nil
         return false
     end
 
-    -- Each client owns its own latch, so network delay cannot cut a remote
-    -- gesture at the server's cycle boundary.
     local held
 
     if ply == LocalPlayer() then
@@ -194,10 +180,6 @@ local function flappingWanted(ply, flying)
             state.startedAt = now
             state.nextBeatAt = now
         end
-
-        -- Pressing Space again while the last stroke is finishing simply
-        -- resumes the already-running rhythm.
-        state.stopAt = nil
 
         if state.nextBeatAt and now >= state.nextBeatAt then
             local cycle = math.floor((now - state.startedAt) / Flight.BEAT_INTERVAL)
@@ -218,17 +200,8 @@ local function flappingWanted(ply, flying)
             state.nextBeatAt = boundary + Flight.BEAT_INTERVAL
         end
     elseif state.active then
-        if not state.stopAt then
-            local elapsed = math.max(now - state.startedAt, 0)
-            local cycles = math.max(math.ceil(elapsed / Flight.FLAP_CYCLE), 1)
-            state.stopAt = state.startedAt + cycles * Flight.FLAP_CYCLE
-        end
-
-        if now >= state.stopAt then
-            state.active = false
-            state.stopAt = nil
-            state.nextBeatAt = nil
-        end
+        state.active = false
+        state.nextBeatAt = nil
     end
 
     return state.active
@@ -249,14 +222,13 @@ local function enforceWings(ply)
     return flying, wanted
 end
 
--- The same double tap sv_flight.lua watches, on the same terms, so both sides
--- reach the same answer from the same inputs.
+-- Predicted double tap flight is the same as the sv_flight.lua version
 local lastJump = 0
 
 hook.Add("KeyPress", "PonyFlight.PredictTakeoff", function(ply, key)
     if ply ~= LocalPlayer() then return end
     if key ~= IN_JUMP then return end
-    -- Only an active prediction blocks a new one; predictedFlying alone is stale.
+    -- Only an active prediction blocks a new one
     if Flight.IsFlying(ply) or (predictedAt and predictedFlying) then return end
     if not Flight.CanFly(ply) then return end
 
@@ -286,7 +258,7 @@ local function updateLean(ply, flapping)
 
         local forwardVelocity = direction:Dot(facing:Forward())
 
-        -- On the pony rig, negative pitch is nose-forward, positive rump-forward.
+        -- On the pony rig, negative pitch is nose-forward
         if forwardVelocity < 0 or flapping then
             targetPitch = math.Clamp(-forwardVelocity * MAX_PITCH, -MAX_PITCH, MAX_PITCH)
         end
@@ -295,7 +267,7 @@ local function updateLean(ply, flapping)
         -- rather than reacting a tick late to the key.
         targetRoll = math.Clamp(direction:Dot(facing:Right()) * MAX_ROLL * ROLL_GAIN, -MAX_ROLL, MAX_ROLL)
 
-        -- Ease the lean in with speed so a slow hover does not list.
+        -- Ease the lean in with speed
         local authority = math.Clamp(speed / 260, 0, 1)
         targetPitch = targetPitch * authority
         targetRoll = targetRoll * authority
@@ -332,9 +304,6 @@ hook.Add("Think", "PonyFlight.Presentation", function()
     if IsValid(localPly) then
         local flying = Flight.IsFlying(localPly)
 
-        -- OnGround is the server's only exit test and is predicted for yourself.
-        -- On the edge, not the condition: staying grounded would keep re-arming
-        -- the window. Resolved before the camera, which reads it this frame.
         local onGround = localPly:OnGround()
 
         if onGround and not wasOnGround and (flying or (predictedAt and predictedFlying)) then
@@ -343,20 +312,16 @@ hook.Add("Think", "PonyFlight.Presentation", function()
 
         wasOnGround = onGround
 
-        -- On the predicted state too: in first person the camera pulling out
-        -- is the whole visible takeoff, so leaving it on the server's answer
-        -- spent the round trip for the one pony the prediction was for.
         local shown = wingsWanted(localPly)
 
         if shown ~= wasFlying then
             wasFlying = shown
-            setThirdPerson(shown)
+            suspendSimpleThirdPerson(shown)
         end
     end
 
     for _, ply in ipairs(player.GetAll()) do
-        -- Lean off the same answer the wings use, so the body banks on the
-        -- prediction too rather than a round trip behind its own wings.
+        -- Lean off the same answer the wings use
         local flying, flapping = enforceWings(ply)
 
         if flying then
@@ -375,13 +340,10 @@ hook.Add("Think", "PonyFlight.Presentation", function()
     end
 end)
 
--- ManipulateBoneAngles takes an offset in the bone's local space, so the world
--- lean is conjugated in as M^-1 * R * M. Think advances the smoothing, not this.
 hook.Add("PPM2.SetupBones", "PonyFlight.Lean", function(ply)
     if not IsValid(ply) or not ply:IsPlayer() then return end
 
-    -- After entity networking has restored the server's stale bodygroup, so the
-    -- correction here is what this render uses.
+    -- Happens after entity networking has restored the server's bodygroup
     applyVisibleWings(ply)
 
     local state = lean[ply]
@@ -413,7 +375,7 @@ hook.Add("EntityRemoved", "PonyFlight.Cleanup", function(ent)
     flapVisual[ent] = nil
 end)
 
--- Exposed for cl_flightdebug.lua; the prediction is otherwise two file-locals.
+-- Exposed for cl_flightdebug.lua
 function Flight.DebugPrediction()
     return predictedAt, predictedFlying
 end
@@ -429,3 +391,31 @@ end
 function Flight.DebugVisibleWingsWanted(ply)
     return visibleWingsValue(ply)
 end
+
+-- Pulled in on whatever it hits so the view never ends up inside geometry
+hook.Add("CalcView", "PonyFlight.Camera", function(ply, origin, angles, fov)
+    if not Flight.VisualFlying(ply) then return end
+
+    local eyes = ply:EyePos()
+    local wanted = eyes - angles:Forward() * CAMERA_DIST + angles:Up() * CAMERA_HEIGHT
+
+    local trace = util.TraceHull({
+        start = eyes,
+        endpos = wanted,
+        mins = Vector(-CAMERA_HULL, -CAMERA_HULL, -CAMERA_HULL),
+        maxs = Vector(CAMERA_HULL, CAMERA_HULL, CAMERA_HULL),
+        filter = ply
+    })
+
+    return {
+        origin = trace.Hit and trace.HitPos + trace.HitNormal * CAMERA_HULL or wanted,
+        angles = angles,
+        fov = fov,
+        drawviewer = true
+    }
+end)
+
+-- A disconnect or a lua_reload mid-flight would otherwise leave their setting off
+hook.Add("ShutDown", "PonyFlight.RestoreThirdPerson", function()
+    suspendSimpleThirdPerson(false)
+end)
