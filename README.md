@@ -21,7 +21,7 @@ PonyFlight.SetProvider("mygamemode", {
 ```
 
 Each field is optional and falls back to the default behavior.
-Since flight movement is predicted, you need to read the actual networked state rather than the server-only tables in your implenetation, otherwise it could cause rubber-banding.
+Since flight movement is predicted, you need to read the actual networked state rather than the server-only tables in your implemetation, otherwise it could cause rubber-banding.
 
 | Field | Scales | Base |
 | --- | --- | --- |
