@@ -93,6 +93,13 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
         return
     end
 
+    -- Before the impact check: touching down is a landing, not a crash. Gravity
+    -- owns the descent now, so a fall arrives fast enough to read as one
+    if ply:OnGround() then
+        Flight.Stop(ply, "landed")
+        return
+    end
+
     local velocity = mv:GetVelocity()
     local speed = velocity:Length()
     local previous = ply.ponyFlightLastSpeed or speed
@@ -113,12 +120,6 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
         end
 
         Flight.Stop(ply, "impact")
-        return
-    end
-
-    -- Landing ends flight
-    if ply:OnGround() then
-        Flight.Stop(ply, "landed")
         return
     end
 

@@ -26,7 +26,7 @@ Since flight movement is predicted, you need to read the actual networked state 
 | Field | Scales | Base |
 | --- | --- | --- |
 | `SpeedMult` | horizontal flight speed | `PonyFlight.SPEED` (650 hu/s) |
-| `VerticalSpeedMult` | vertical flight speed | `PonyFlight.CLIMB_SPEED` (420), `PonyFlight.DIVE_SPEED` (780) |
+| `VerticalSpeedMult` | climb speed | `PonyFlight.CLIMB_SPEED` (420 hu/s) |
 
 If CanFly changes mid-flight, call `PonyFlight.Recheck(ply)`.
 

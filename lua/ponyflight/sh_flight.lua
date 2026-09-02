@@ -11,11 +11,9 @@ Flight.PPM2_NW_VAR = "ppm2_fly"
 
 -- Speeds in hu/s: land speed is ~200 walking, ~400 running
 Flight.SPEED = 650          -- base horizontal flight speed
-Flight.CLIMB_SPEED = 420    -- base vertical climb speed
-Flight.DIVE_SPEED = 780     -- Ctrl, faster than climbing because gravity helps
+Flight.CLIMB_SPEED = 420    -- lift target, not achieved climb -- gravity takes most of it
 Flight.ACCEL = 900          -- in hu/s^2
 Flight.GLIDE_DRAG = 0.55    -- per second decay
-Flight.SINK = 55            -- passive sink when not climbing
 Flight.DOUBLE_TAP = 0.32    -- seconds allowed between the two Space presses
 Flight.BEAT_VOLUME = 0.3    -- volume of the wingbeat sfx
 
@@ -224,12 +222,10 @@ hook.Add("Move", "PonyFlight.Move", function(ply, mv)
 
     local vertical = vel.z
 
+    -- Only lift is ours. Left alone, the engine's own gravity does the falling,
+    -- so a flying pony drops no faster than anypony else
     if mv:KeyDown(IN_JUMP) then
         vertical = Lerp(math.min(Flight.ACCEL * dt / Flight.CLIMB_SPEED, 1), vertical, Flight.CLIMB_SPEED * verticalMult)
-    elseif mv:KeyDown(IN_DUCK) then
-        vertical = Lerp(math.min(Flight.ACCEL * dt / Flight.DIVE_SPEED, 1), vertical, -Flight.DIVE_SPEED * verticalMult)
-    else
-        vertical = Lerp(math.min(dt * 2, 1), vertical, -Flight.SINK)
     end
 
     mv:SetForwardSpeed(0)
