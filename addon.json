@@ -1,0 +1,11 @@
+{
+    "title": "PonyFlight",
+    "type": "effects",
+    "tags": ["cartoon", "roleplay"],
+    "ignore": [
+        "*.md",
+        ".git/*",
+        ".gitignore",
+        ".gitattributes"
+    ]
+}

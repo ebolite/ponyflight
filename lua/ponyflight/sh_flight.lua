@@ -1,5 +1,5 @@
 --[[
-PonyRP pegasus flight -- shared movement.
+PonyFlight -- shared movement.
 
 Replaces PPM2's flight wholesale rather than patching around it. PPM2's
 controller (ponyfly.moon) never actually moves the player: its FinishMove
@@ -22,6 +22,9 @@ default movement run, so TryPlayerMove gives real collision and sliding, and
 the velocity ends up on the player where every other addon can read it. The
 sound addons then need no patch at all.
 
+This addon flies whoever it is told to fly. Who that is, and how fast, is a
+balance question owned by the host gamemode -- see WHO MAY FLY below.
+
 DISABLING PPM2
 --------------
 ppm2_sv_flight 0 is not sufficient. That convar guards PPM2's SetupMove hook
@@ -32,23 +35,22 @@ bolted on. We remove those three hooks outright and set the convar as well.
 Its CalcMainActivity hook goes the same way, and this file replaces it --
 in both realms, which is the point; see the flight activity section below.
 PPM2 couples its noclip leg pose, disabled IK, and wing-flap gesture to
-ppm2_fly; PonyRP keeps the pose and disabled IK for the whole flight while
+ppm2_fly; PonyFlight keeps the pose and disabled IK for the whole flight while
 using that flag only for the Space-held flap gesture. The clientside
 bodygroup override keeps the wings spread while gliding.
 ]]
 
-PonyRP = PonyRP or {}
-PonyRP.Flight = PonyRP.Flight or {}
+PonyFlight = PonyFlight or {}
 
-local Flight = PonyRP.Flight
+local Flight = PonyFlight
 
 -- Networked so the client's own movement prediction and everypony else's
 -- rendering agree on who is flying.
-Flight.NW_VAR = "ponyrp_flying"
+Flight.NW_VAR = "ponyflight_flying"
 
 -- Separate from flight so clients can keep the wings spread while the
 -- server-owned flap gesture follows Space.
-Flight.FLAP_NW_VAR = "ponyrp_flapping"
+Flight.FLAP_NW_VAR = "ponyflight_flapping"
 
 -- PPM2's visual flag. We drive it; PPM2 reads it for the pose and wings.
 Flight.PPM2_NW_VAR = "ppm2_fly"
@@ -101,17 +103,116 @@ Flight.FLAP_CYCLE_BEATS = 1   -- releasing Space finishes the stroke in progress
 Flight.FLAP_CYCLE = Flight.BEAT_INTERVAL * Flight.FLAP_CYCLE_BEATS
 
 Flight.WINGBEATS = {
-    "ponyrp/wingbeat1.wav",
-    "ponyrp/wingbeat2.wav",
-    "ponyrp/wingbeat3.wav",
-    "ponyrp/wingbeat4.wav",
-    "ponyrp/wingbeat5.wav",
+    "ponyflight/wingbeat1.wav",
+    "ponyflight/wingbeat2.wav",
+    "ponyflight/wingbeat3.wav",
+    "ponyflight/wingbeat4.wav",
+    "ponyflight/wingbeat5.wav",
 }
 
--- Resolved on call, never cached: sh_tribes.lua sorts after this file in the
--- loader's alphabetical sh_ pass, so at load time PonyRP.Tribes is still nil.
-local function tribes()
-    return PonyRP.Tribes
+--[[
+WHO MAY FLY
+-----------
+PonyFlight does the flying. It does not decide who is allowed to do it, or
+how fast -- those are balance decisions, and balance belongs to whatever
+game this is installed in. A host registers a provider:
+
+    PonyFlight.SetProvider("ponyrp", {
+        CanFly            = function(ply) return ... end,
+        SpeedMult         = function(ply) return 1 end,
+        VerticalSpeedMult = function(ply) return 1 end,
+    })
+
+Every field is optional and falls back to the default below, so a host that
+only wants to change who flies need not restate the speeds. Fields are
+checked at registration rather than on call: these run inside movement, and
+a provider that errors every frame would take player movement down with it.
+
+The default reads the PPM/2 race, so this addon is useful with PPM/2 alone
+and no gamemode at all. Pegasi and alicorns fly identically here. Some
+servers slow alicorns down, but that is one game's design decision, not a
+fact about flight, and this is the layer that should not presume it.
+
+CanFly answers only the permission question. Whether a player is alive, in
+a vehicle or underwater stays with Flight.CanFly below, because those are
+facts about flying rather than about who is entitled to.
+]]
+local FLYING_RACES = {
+    PEGASUS = true,
+    ALICORN = true,
+}
+
+local function ppm2Race(ply)
+    if not IsValid(ply) or not ply.GetPonyData then return nil end
+
+    local data = ply:GetPonyData()
+    if not data or not isfunction(data.GetRace) then return nil end
+
+    return data:GetRace()
+end
+
+local DEFAULT_PROVIDER = {
+    CanFly = function(ply)
+        local race = ppm2Race(ply)
+        return race ~= nil and FLYING_RACES[race] == true
+    end,
+    SpeedMult = function() return 1 end,
+    VerticalSpeedMult = function() return 1 end,
+}
+
+local FIELDS = { "CanFly", "SpeedMult", "VerticalSpeedMult" }
+
+local activeProvider = DEFAULT_PROVIDER
+local activeName = "default"
+
+--[[
+Registering replaces rather than stacks. Two addons both claiming to own
+who may fly is a conflict to be noticed, not merged: the second one wins
+and says so, instead of silently ANDing two opinions together.
+]]
+function Flight.SetProvider(name, provider)
+    if not isstring(name) then
+        error("PonyFlight.SetProvider: name must be a string", 2)
+    end
+
+    if not istable(provider) then
+        error("PonyFlight.SetProvider: provider must be a table", 2)
+    end
+
+    local resolved = {}
+
+    for _, field in ipairs(FIELDS) do
+        local fn = provider[field]
+
+        if fn ~= nil and not isfunction(fn) then
+            error(("PonyFlight.SetProvider: %s.%s must be a function or nil")
+                :format(name, field), 2)
+        end
+
+        resolved[field] = fn or DEFAULT_PROVIDER[field]
+    end
+
+    if activeName ~= "default" and activeName ~= name then
+        ErrorNoHalt(("[PonyFlight] '%s' is replacing '%s' as the flight " ..
+            "provider; only one can own it.\n"):format(name, activeName))
+    end
+
+    activeProvider = resolved
+    activeName = name
+
+    hook.Run("PonyFlight_ProviderChanged", name)
+end
+
+-- Back to the PPM/2 default. Mostly for a host unloading cleanly.
+function Flight.ClearProvider()
+    activeProvider = DEFAULT_PROVIDER
+    activeName = "default"
+
+    hook.Run("PonyFlight_ProviderChanged", "default")
+end
+
+function Flight.GetProviderName()
+    return activeName
 end
 
 function Flight.CanFly(ply)
@@ -119,10 +220,7 @@ function Flight.CanFly(ply)
     if ply:InVehicle() then return false end
     if ply:WaterLevel() > 0 then return false end
 
-    local Tribes = tribes()
-    if not Tribes then return false end
-
-    return Tribes.GetStats(Tribes.GetRace(ply)).canFly == true
+    return activeProvider.CanFly(ply) == true
 end
 
 function Flight.IsFlying(ply)
@@ -134,21 +232,12 @@ function Flight.IsFlapping(ply)
 end
 
 
--- Alicorns fly at half speed ("slow and primarily vertical", spec §2); the
--- multiplier already lives in the tribe stat table, so read it rather than
--- duplicating the balance decision here.
 function Flight.SpeedMult(ply)
-    local Tribes = tribes()
-    if not Tribes then return 1 end
-    return Tribes.GetStats(Tribes.GetRace(ply)).flightSpeedMult or 1
+    return tonumber(activeProvider.SpeedMult(ply)) or 1
 end
 
 function Flight.VerticalSpeedMult(ply)
-    local Tribes = tribes()
-    if not Tribes then return 1 end
-
-    local stats = Tribes.GetStats(Tribes.GetRace(ply))
-    return stats.flightVerticalMult or stats.flightSpeedMult or 1
+    return tonumber(activeProvider.VerticalSpeedMult(ply)) or 1
 end
 
 --[[
@@ -182,8 +271,8 @@ local function neuterPPM2FlightSoon()
 end
 
 neuterPPM2FlightSoon()
-hook.Add("InitPostEntity", "PonyRP.Flight.NeuterPPM2", neuterPPM2FlightSoon)
-hook.Add("OnReloaded", "PonyRP.Flight.NeuterPPM2", neuterPPM2FlightSoon)
+hook.Add("InitPostEntity", "PonyFlight.NeuterPPM2", neuterPPM2FlightSoon)
+hook.Add("OnReloaded", "PonyFlight.NeuterPPM2", neuterPPM2FlightSoon)
 
 --[[
 Flight pose: one gesture, held for the whole flight.
@@ -222,7 +311,7 @@ flight was a reimplementation of exactly this.
 THE 370
 -------
 PPM/2 adds `return ACT_GMOD_NOCLIP_LAYER, 370` on top of those lines
-(ponyfly.moon:300), and PonyRP inherited the constant. 370 is not a
+(ponyfly.moon:300), and this addon inherited the constant. 370 is not a
 flight sequence on any pony model:
 
     player_default_base_new     [370] = ACT_HEADBOB   (41f @ 30fps, 1.333s)
@@ -298,7 +387,7 @@ function Flight.VisualFlying(ply)
     return Flight.IsFlying(ply)
 end
 
-hook.Add("CalcMainActivity", "PonyRP.Flight.Activity", function(ply)
+hook.Add("CalcMainActivity", "PonyFlight.Activity", function(ply)
     local flying = Flight.VisualFlying(ply)
     local isNewPony = not isfunction(ply.IsNewPonyCached) or ply:IsNewPonyCached()
 
@@ -306,9 +395,9 @@ hook.Add("CalcMainActivity", "PonyRP.Flight.Activity", function(ply)
         -- isPlayingPPM2Anim is tested as well as our own flag so a gesture
         -- started by PPM/2 -- before our hook removal landed, or across a
         -- hot reload -- is cleaned up rather than left running forever.
-        if not ply.ponyrpFlightActivity and not ply.isPlayingPPM2Anim then return end
+        if not ply.ponyFlightActivity and not ply.isPlayingPPM2Anim then return end
 
-        ply.ponyrpFlightActivity = nil
+        ply.ponyFlightActivity = nil
         ply.isPlayingPPM2Anim = false
         ply:AnimResetGestureSlot(GESTURE_SLOT_CUSTOM)
 
@@ -318,7 +407,7 @@ hook.Add("CalcMainActivity", "PonyRP.Flight.Activity", function(ply)
 
     -- Three reasons to restart, and the third is the wing hold:
     --
-    --   entering flight        -- ponyrpFlightActivity is not set yet
+    --   entering flight        -- ponyFlightActivity is not set yet
     --   something cleared the  -- isPlayingPPM2Anim is checked as well as our
     --   gesture mid-flight        own flag, so a pony does not glide in a
     --                             standing pose until they land
@@ -329,8 +418,8 @@ hook.Add("CalcMainActivity", "PonyRP.Flight.Activity", function(ply)
     -- While flapping, only the first two apply and the loop runs freely.
     local flapping = ply:GetNW2Bool(Flight.PPM2_NW_VAR, false)
 
-    if not ply.ponyrpFlightActivity or not ply.isPlayingPPM2Anim or not flapping then
-        ply.ponyrpFlightActivity = true
+    if not ply.ponyFlightActivity or not ply.isPlayingPPM2Anim or not flapping then
+        ply.ponyFlightActivity = true
         ply.isPlayingPPM2Anim = true
         ply:AnimRestartGesture(GESTURE_SLOT_CUSTOM, ACT_GMOD_NOCLIP_LAYER, false)
     end
@@ -353,7 +442,7 @@ collision, real sliding, and a velocity other addons can read. Zeroing the
 wish speeds first stops the engine's air acceleration adding its own
 contribution on top of ours.
 ]]
-hook.Add("Move", "PonyRP.Flight.Move", function(ply, mv)
+hook.Add("Move", "PonyFlight.Move", function(ply, mv)
     if not Flight.IsFlying(ply) then return end
 
     local mult = Flight.SpeedMult(ply)

@@ -1,5 +1,5 @@
 --[[
-PonyRP pegasus flight -- client presentation.
+PonyFlight -- client presentation.
 
 Three jobs: put the camera behind the pony while flying, bank the body into
 what it is actually doing, and make PPM2 notice that the wings should be
@@ -30,7 +30,7 @@ so computing it in a draw hook would step it once per render pass rather than
 once per frame, which reflections and RT cameras would multiply.
 ]]
 
-local Flight = PonyRP.Flight
+local Flight = PonyFlight
 
 local THIRDPERSON_VAR = "simple_thirdperson_enabled"
 
@@ -97,15 +97,15 @@ end
 Wings.
 
 PPM2 couples two things to ppm2_fly: its noclip gesture makes the wings flap,
-and SelectWingsType chooses the spread bodygroup. PonyRP deliberately splits
-them. ponyrp_flying decides whether the wings are spread; ponyrp_flapping and
+and SelectWingsType chooses the spread bodygroup. PonyFlight deliberately splits
+them. ponyflight_flying decides whether the wings are spread; ponyflight_flapping and
 the local Space key decide whether ppm2_fly runs the gesture. The render-time
 override below keeps the spread bodygroup selected when that gesture is off.
 
 PPM2 only re-reads SelectWingsType inside ApplyRace, and nothing calls that
 when ppm2_fly changes, so we still trigger its refresh on flap transitions.
 Neither PPM2 flag is treated as authority: both flight and flapping derive
-from PonyRP-owned state that PPM2 never writes.
+from PonyFlight-owned state that PPM2 never writes.
 ]]
 --[[
 ApplyBodygroups, not SlowUpdate, and the difference is the reset.
@@ -264,7 +264,7 @@ closed. The old reconcile could do the same in reverse -- on a slow landing
 confirmation it flipped its own guess back and wrote a stale true that the
 server would likewise never contradict. Stuck open on landing.
 
-So nothing is stored now. ponyrp_flying is the base -- it is ours, the server
+So nothing is stored now. ponyflight_flying is the base -- it is ours, the server
 owns it, and PPM/2 has never heard of it, so nothing else writes it. The
 prediction is a bounded override on top, live only until the server catches
 up or the window lapses, so it can never outlive its usefulness or win an
@@ -318,7 +318,7 @@ there are at least four things that do, it is right again the next frame
 instead of until the next time the server happens to change its mind.
 
 This is what carries other ponies too. Their base is the networked
-ponyrp_flapping, so PPM/2 zeroing ppm2_fly while a pegasus is actively
+ponyflight_flapping, so PPM/2 zeroing ppm2_fly while a pegasus is actively
 flapping heals in a frame, where before it could be permanent.
 ]]
 local function flappingWanted(ply, flying)
@@ -430,7 +430,7 @@ end
 -- than one guessing at the other.
 local lastJump = 0
 
-hook.Add("KeyPress", "PonyRP.Flight.PredictTakeoff", function(ply, key)
+hook.Add("KeyPress", "PonyFlight.PredictTakeoff", function(ply, key)
     if ply ~= LocalPlayer() then return end
     if key ~= IN_JUMP then return end
     -- Only an ACTIVE prediction blocks a new one. Testing predictedFlying on
@@ -498,9 +498,9 @@ local function clearLean(ply)
     if IsValid(ply) then
         ply:ManipulateBoneAngles(0, angle_zero)
 
-        if ply.ponyrpFlightRenderAngles then
-            ply:SetRenderAngles(ply.ponyrpFlightRenderAngles)
-            ply.ponyrpFlightRenderAngles = nil
+        if ply.ponyFlightRenderAngles then
+            ply:SetRenderAngles(ply.ponyFlightRenderAngles)
+            ply.ponyFlightRenderAngles = nil
         end
     end
 end
@@ -508,7 +508,7 @@ end
 local wasFlying = false
 local wasOnGround = false
 
-hook.Add("Think", "PonyRP.Flight.Presentation", function()
+hook.Add("Think", "PonyFlight.Presentation", function()
     local localPly = LocalPlayer()
 
     if IsValid(localPly) then
@@ -540,7 +540,7 @@ hook.Add("Think", "PonyRP.Flight.Presentation", function()
         half: in first person there are no wings on screen to be quick about.
         Whatever the bodygroup does, you cannot see your own pony until the
         third person camera has pulled out, so gating that on the un-predicted
-        ponyrp_flying spent the whole round trip before the flight became
+        ponyflight_flying spent the whole round trip before the flight became
         visible at all -- while everypony else, already looking at you, saw
         the wings open immediately.
 
@@ -568,7 +568,7 @@ hook.Add("Think", "PonyRP.Flight.Presentation", function()
                 -- which runs at priority -2 and places the cutie mark, reads
                 -- this frame's value instead of last frame's.
                 local angles = ply:GetRenderAngles()
-                ply.ponyrpFlightRenderAngles = ply.ponyrpFlightRenderAngles or angles
+                ply.ponyFlightRenderAngles = ply.ponyFlightRenderAngles or angles
                 ply:SetRenderAngles(Angle(state.pitch, angles.y, state.roll))
             end
         else
@@ -587,7 +587,7 @@ world-space lean is conjugated into it as M^-1 * R * M against the bone's
 world rotation. Deriving that beats guessing which way the rig's local axes
 happen to point.
 ]]
-hook.Add("PPM2.SetupBones", "PonyRP.Flight.Lean", function(ply)
+hook.Add("PPM2.SetupBones", "PonyFlight.Lean", function(ply)
     if not IsValid(ply) or not ply:IsPlayer() then return end
 
     -- PPM2 calls SetupBones from its PrePlayerDraw, after ordinary entity
@@ -618,7 +618,7 @@ hook.Add("PPM2.SetupBones", "PonyRP.Flight.Lean", function(ply)
     ply:ManipulateBoneAngles(0, (inverse * desired * boneWorld):GetAngles())
 end)
 
-hook.Add("EntityRemoved", "PonyRP.Flight.Cleanup", function(ent)
+hook.Add("EntityRemoved", "PonyFlight.Cleanup", function(ent)
     lean[ent] = nil
     wingState[ent] = nil
     flapVisual[ent] = nil

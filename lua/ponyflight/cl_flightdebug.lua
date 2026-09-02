@@ -1,5 +1,5 @@
 --[[
-PonyRP flight diagnostics -- client side.
+PonyFlight diagnostics -- client side.
 
 Four seconds of delay, variable, no traceback. That figure is the reason this
 file exists: every explanation on the table predicts half a second at worst,
@@ -12,13 +12,13 @@ So this watches every link in the chain at once and prints only when one of
 them changes, with the gap since the last change. Whichever column moves late
 is the broken link, and the gaps say how late:
 
-    flying     ponyrp_flying, the server's answer and what we derive from
+    flying     ponyflight_flying, the server's answer and what we derive from
     ppm2       ppm2_fly, now the flap gesture flag
-    flap       the server-owned ponyrp_flapping state
+    flap       the server-owned ponyflight_flapping state
     pred       our prediction, and whether its window is still live
     want       what wingsWanted() decided this frame
     wings      the bodygroup actually on the model right now
-    expect     the bodygroup PonyRP will enforce (spread even while gliding)
+    expect     the bodygroup PonyFlight will enforce (spread even while gliding)
     gesture    isPlayingPPM2Anim; now follows flight, not the flap flag
     move       movetype, for comparison against noclip
 
@@ -26,12 +26,12 @@ Read it against the two known-good references. Noclip flips move and gesture
 together with no server involved. Base PPM/2 flight flips ppm2 inside a
 predicted SetupMove and kicks the bodygroup through PlayerNoClip.
 
-    ponyrp_flight_watch          watch yourself
-    ponyrp_flight_watch <name>   watch somepony else, for the client/server split
-    ponyrp_flight_watch_stop
+    ponyflight_watch          watch yourself
+    ponyflight_watch <name>   watch somepony else, for the client/server split
+    ponyflight_watch_stop
 ]]
 
-local Flight = PonyRP.Flight
+local Flight = PonyFlight
 
 local watching = nil
 local previous = nil
@@ -103,7 +103,7 @@ local function flag(value)
     return value and "Y" or "n"
 end
 
-hook.Add("Think", "PonyRP.Flight.Debug", function()
+hook.Add("Think", "PonyFlight.Debug", function()
     if not watching then return end
     if not IsValid(target) then return end
 
@@ -133,7 +133,7 @@ hook.Add("Think", "PonyRP.Flight.Debug", function()
         shot.move))
 end)
 
-concommand.Add("ponyrp_flight_watch", function(_, _, args)
+concommand.Add("ponyflight_watch", function(_, _, args)
     target = LocalPlayer()
 
     if args[1] then
@@ -149,14 +149,14 @@ concommand.Add("ponyrp_flight_watch", function(_, _, args)
     previous = nil
     lastAt = CurTime()
 
-    Msg(string.format("[ponyrp flight] watching %s -- transitions only.\n",
+    Msg(string.format("[ponyflight] watching %s -- transitions only.\n",
         IsValid(target) and target:Nick() or "?"))
     Msg("    pred column: value, then * while the prediction window is live.\n")
     Msg("    MISMATCH means SelectWingsType and the model disagree.\n")
 end)
 
-concommand.Add("ponyrp_flight_watch_stop", function()
+concommand.Add("ponyflight_watch_stop", function()
     watching = nil
     target = nil
-    Msg("[ponyrp flight] stopped.\n")
+    Msg("[ponyflight] stopped.\n")
 end)
