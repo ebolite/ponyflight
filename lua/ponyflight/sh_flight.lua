@@ -128,6 +128,17 @@ only wants to change who flies need not restate the speeds. Fields are
 checked at registration rather than on call: these run inside movement, and
 a provider that errors every frame would take player movement down with it.
 
+All three are asked in BOTH realms, because the move is predicted. A
+provider that answers differently on the client than on the server
+rubber-bands, so it has to read networked or otherwise shared state -- a
+server-only table is the wrong source however convenient it looks.
+
+SpeedMult scales the horizontal cruise. VerticalSpeedMult scales climb and
+dive together; there is deliberately not a knob per direction, because the
+pair is what makes flight feel like one thing. Neither touches the passive
+sink, the glide decay or the acceleration, so slowing a flier makes holding
+altitude disproportionately expensive -- worth knowing before tuning.
+
 The default reads the PPM/2 race, so this addon is useful with PPM/2 alone
 and no gamemode at all. Pegasi and alicorns fly identically here. Some
 servers slow alicorns down, but that is one game's design decision, not a

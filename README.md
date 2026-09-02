@@ -1,66 +1,59 @@
 # PonyFlight
 
-Pegasus flight for PPM/2 ponies, built on the engine's own movement rather
-than beside it.
+Replaces PPM/2's pegasus flight system with a more animated, momentum-based flight system. Requires PPM/2.
 
-## Why it exists
+## Controlling flight
 
-PPM/2 ships a flight controller (`ponyfly.moon`) that never actually moves
-the player. Its `FinishMove` runs a hull trace and calls `SetPos`, adding raw
-velocity to the origin with no frame scaling, so the "velocity" it carries is
-units-per-tick. Two things follow:
-
-- **Entity velocity is meaningless while flying.** Anything reading
-  `GetVelocity` sees roughly nothing, which is why Falling Wind and Fly By
-  Sounds both go quiet midair -- they are handed a number in the wrong unit,
-  an order of magnitude below their thresholds. PPM/2 multiplies by 50 to
-  convert back on landing, which is the same admission.
-- **Collision is a single trace with an ad-hoc bounce**, so fast flight snags
-  on corners instead of sliding along them.
-
-PonyFlight writes velocity onto the movedata and lets default movement run.
-`TryPlayerMove` gives real collision and sliding, and the velocity lands on
-the player where every other addon can read it. The sound addons need no
-patch at all.
-
-PPM/2's own flight is removed outright, not merely disabled: `ppm2_sv_flight
-0` guards only its `SetupMove` hook, while its `Move`, `FinishMove` and
-`CalcMainActivity` hooks gate purely on the `ppm2_fly` networked bool. All
-four are removed, in both realms, and the convar is set as well.
-
-## Who may fly
-
-PonyFlight does the flying. It does not decide who is allowed to, or how
-fast -- that is balance, and balance belongs to the game it is installed in.
-
-Out of the box it reads the PPM/2 race: pegasi and alicorns fly, at the same
-speed. Some servers slow alicorns down, but that is one game's design
-decision rather than a fact about flight, so it is not baked in here.
-
-A host gamemode can take that over:
+PonyFlight does the flying; a host gamemode decides who flies and how fast.
+Register a provider:
 
 ```lua
 PonyFlight.SetProvider("mygamemode", {
-    CanFly            = function(ply) return ply:GetNWBool("can_fly") end,
+    CanFly            = function(ply) return ply:GetNWBool("can_fly", false) end,
     SpeedMult         = function(ply) return 1 end,
     VerticalSpeedMult = function(ply) return 1 end,
 })
 ```
 
-Every field is optional and falls back to the PPM/2 default, so a host that
-only wants to change *who* flies need not restate the speeds. Fields are
-type-checked at registration rather than on call, because these run inside
-movement and a provider that errors every frame would take player movement
-down with it.
+Every field is optional and falls back to the default, which flies PPM/2
+pegasi and alicorns at equal speed. Fields are type-checked at registration,
+not on call. Registering replaces rather than stacks: one addon owns flight,
+and the second to register wins and says so on the console.
 
-Registering replaces rather than stacks -- two addons both claiming to own
-who may fly is a conflict worth noticing, so the second one wins and says so
-on the console.
+### What the multipliers scale
 
-When eligibility changes underneath a pony in mid-air, call
-`PonyFlight.Recheck(ply)` and they will be grounded if they no longer
-qualify. PPM/2 race changes are handled already, so a standalone install
-needs no wiring.
+| Returned by | Scales | Base |
+| --- | --- | --- |
+| `SpeedMult` | horizontal cruise | `Flight.SPEED` (650 hu/s) |
+| `VerticalSpeedMult` | climb **and** dive together | `Flight.CLIMB_SPEED` (420), `Flight.DIVE_SPEED` (780) |
+
+Both are read every movement frame, per player. `1` leaves the base alone.
+There is no separate climb and dive knob -- halving one halves the other.
+
+Neither multiplier touches passive sink (`Flight.SINK`), glide decay
+(`Flight.GLIDE_DRAG`) or acceleration (`Flight.ACCEL`). A slowed pony still
+sinks at the same rate and still reaches its lower cruise in about the same
+time, so slowing a flier makes holding altitude disproportionately expensive.
+That is a real effect worth tuning around, not a rounding error.
+
+### Answer the same in both realms
+
+Flight movement is predicted -- the `Move` hook runs on the client and on the
+server. A provider that answers differently in the two realms rubber-bands.
+Read networked or otherwise shared state, never a server-only table.
+
+### Global feel
+
+`Flight.SPEED`, `CLIMB_SPEED`, `DIVE_SPEED`, `ACCEL`, `GLIDE_DRAG` and
+`SINK` are plain fields on the `PonyFlight` table. Overwriting them changes
+flight for everypony rather than per player, and must be done in both realms
+for the same reason as above.
+
+### When eligibility changes
+
+Call `PonyFlight.Recheck(ply)` when your own answer to `CanFly` changes and a
+pony who no longer qualifies is grounded. PPM/2 race changes are covered
+already, so a standalone install needs no wiring.
 
 ## Hooks
 
@@ -68,22 +61,3 @@ needs no wiring.
 | --- | --- |
 | `PonyFlight_Changed(ply, flying, reason)` | a pony takes off or lands |
 | `PonyFlight_ProviderChanged(name)` | a host registers or clears a provider |
-
-## Diagnostics
-
-```
-ponyflight_watch            watch yourself
-ponyflight_watch <name>     watch somepony else, for the client/server split
-ponyflight_watch_stop
-```
-
-## Requirements
-
-PPM/2. That is the only hard dependency; no gamemode is required.
-
-## Tuning
-
-The numbers in `sh_flight.lua` are placeholders meant to be tried, felt and
-edited -- deliberately constants rather than convars, so they are not left as
-a console surface. Speeds are hu/s and compare directly against land speed
-(~200 walk, ~400 run).
