@@ -126,9 +126,8 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
 
         Flight.Stop(ply, "impact")
 
-        -- Next frame, not here. Damage dealt from inside a movement hook does
-        -- not reliably reach the player, and the crash was being detected and
-        -- the flight ended while the pony walked away unhurt.
+        -- Measured here, dealt next frame. Damage from inside a movement hook
+        -- is not reliable, and we never confirmed it works from one.
         timer.Simple(0, function()
             if not IsValid(ply) or not ply:Alive() then return end
 
@@ -138,25 +137,17 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
             end
 
             local dealt = impactDamage(crashSpeed)
+            local before = ply:Health()
 
-            local damage = DamageInfo()
-            damage:SetDamage(dealt)
-            damage:SetDamageType(DMG_CRUSH)
-            damage:SetAttacker(ply)
-
-            -- The world, not the pony. A gamemode reading the inflictor to
-            -- classify a swing sees a player holding a weapon otherwise, and
-            -- PonyRP's melee pipeline scaled the crash by the tribe multiplier.
-            damage:SetInflictor(game.GetWorld())
-
-            local healthBefore, armorBefore = ply:Health(), ply:Armor()
-            ply:TakeDamageInfo(damage)
+            -- TakeDamage rather than a DamageInfo. One carrying DMG_CRUSH was
+            -- dropped before it reached the pony, and the generic type also
+            -- keeps a gamemode from reading the crash as a melee swing.
+            ply:TakeDamage(dealt, ply, game.GetWorld())
 
             if IMPACT_DEBUG:GetBool() then
                 MsgN(string.format(
-                    "[ponyflight] %s  dealt %.0f  health %d -> %d  armor %d -> %d  god %s",
-                    ply:Nick(), dealt, healthBefore, ply:Health(),
-                    armorBefore, ply:Armor(), tostring(ply:HasGodMode())))
+                    "[ponyflight] %s crashed at %.0f  dealt %.0f  health %d -> %d",
+                    ply:Nick(), crashSpeed, dealt, before, ply:Health()))
             end
         end)
 
@@ -203,43 +194,3 @@ end)
 hook.Add("PonyFlight_ProviderChanged", "PonyFlight.RecheckOnProvider", function()
     Flight.RecheckAll()
 end)
-
--- Which damage types actually land on this pony. TakeDamageInfo with
--- DMG_CRUSH did nothing while TakeDamage worked, so something is filtering
--- on the type rather than on the call.
-local TEST_TYPES = {
-    { "DMG_GENERIC", DMG_GENERIC },
-    { "DMG_CRUSH",   DMG_CRUSH },
-    { "DMG_FALL",    DMG_FALL },
-    { "DMG_SLASH",   DMG_SLASH },
-    { "DMG_CLUB",    DMG_CLUB },
-    { "DMG_DIRECT",  DMG_DIRECT },
-}
-
-concommand.Add("ponyflight_test_damage", function(ply)
-    if not IsValid(ply) then return end
-
-    MsgN("[ponyflight] damage type sweep, 5 each")
-
-    for _, entry in ipairs(TEST_TYPES) do
-        local before = ply:Health()
-
-        local damage = DamageInfo()
-        damage:SetDamage(5)
-        damage:SetDamageType(entry[2])
-        damage:SetAttacker(ply)
-        damage:SetInflictor(game.GetWorld())
-        damage:SetDamagePosition(ply:WorldSpaceCenter())
-        ply:TakeDamageInfo(damage)
-
-        MsgN(string.format("    %-12s %3d -> %3d  %s",
-            entry[1], before, ply:Health(),
-            ply:Health() < before and "landed" or "BLOCKED"))
-    end
-
-    local before = ply:Health()
-    ply:TakeDamage(5, ply, game.GetWorld())
-    MsgN(string.format("    %-12s %3d -> %3d  %s  (control)",
-        "TakeDamage", before, ply:Health(),
-        ply:Health() < before and "landed" or "BLOCKED"))
-end, nil, "Deal 5 damage of each type, to see which ones this server lets through")
