@@ -1,6 +1,10 @@
 # PonyFlight
 
 Replaces PPM/2's pegasus flight system with a more animated, momentum-based flight system. Requires PPM/2.
+Has SimpleThirdperson support, so the flight view uses whatever is configured there, and optionally prevents
+switching out of thirdperson by default.
+
+Blood and gore from impacts can be disabled with `ponyflight_enablegore`.
 
 # Installation
 Install from the workshop page or drop this whole folder into your /addons/ folder.
@@ -36,12 +40,7 @@ If CanFly changes mid-flight, call `PonyFlight.Recheck(ply)`.
 | --- | --- | --- | --- |
 | `ponyflight_enterthirdperson` | client | `1` | Switch to third person while flying |
 | `ponyflight_forcethirdperson` | server, replicated | `0` | Force third person while flying, and hold players in it |
-| `ponyflight_enablegore` | server | `1` | Blood and gore on a fatal crash. `0` kills the pony and leaves them whole |
-
-With Simple ThirdPerson installed we switch its view on rather than running our
-own camera, so the player keeps the distance and smoothing they already tuned.
-Either way we hold them in third person for the flight and put the setting back
-on landing.
+| `ponyflight_enablegore` | server | `1` | Blood and gore on a fatal crash. |
 
 ## Hooks
 

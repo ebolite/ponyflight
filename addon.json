@@ -4,6 +4,7 @@
     "tags": ["cartoon", "roleplay"],
     "ignore": [
         "*.md",
+        "*.tmp",
         ".git/*",
         ".gitignore",
         ".gitattributes"
