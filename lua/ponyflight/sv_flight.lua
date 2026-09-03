@@ -46,20 +46,69 @@ local function impactSound(ply, speed)
         CHAN_BODY)
 end
 
+-- Lifted from RAMI'S Drugs [Consumables] (workshop 3728940551), whose expired
+-- pre-workout does this to anypony who hits a wall at speed. Two changes: the
+-- origin is the pony's centre rather than 45 units up, since a pony is shorter
+-- than the player it was written for, and the damage type is not DMG_CRUSH --
+-- DPP2's antipropkill zeroes that for players and strips the flags with it.
+local GIB_PARTS = {
+    { "models/gibs/HGIBS.mdl", 1 },
+    { "models/gibs/HGIBS_spine.mdl", 1 },
+    { "models/gibs/HGIBS_scapula.mdl", 2 },
+    { "models/gibs/HGIBS_rib.mdl", 6 },
+}
+
 local function gib(ply)
     local pos = ply:WorldSpaceCenter()
 
-    local effect = EffectData()
-    effect:SetOrigin(pos)
-    effect:SetNormal(VectorRand():GetNormalized())
-    effect:SetMagnitude(6)
-    effect:SetScale(4)
-    effect:SetFlags(3)
-    util.Effect("bloodspray", effect)
+    for _ = 1, 6 do
+        local effect = EffectData()
+        effect:SetOrigin(pos + VectorRand(-20, 20))
+        effect:SetScale(math.random(15, 25))
+        effect:SetFlags(3)
+        effect:SetColor(0)
+        util.Effect("bloodspray", effect, true, true)
+        util.Effect("BloodImpact", effect, true, true)
+    end
+
     util.Decal("Blood", pos, pos - Vector(0, 0, 96))
 
-    ply:EmitSound("physics/flesh/flesh_bloody_break.wav", 100, math.random(95, 105))
-    ply:Kill()
+    for _, part in ipairs(GIB_PARTS) do
+        for _ = 1, part[2] do
+            local piece = ents.Create("prop_physics")
+            piece:SetModel(part[1])
+            piece:SetPos(pos + VectorRand(-15, 15))
+            piece:Spawn()
+            piece:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+
+            local phys = piece:GetPhysicsObject()
+
+            if IsValid(phys) then
+                phys:Wake()
+                phys:ApplyForceCenter(VectorRand(-1, 1):GetNormalized() * math.random(3000, 8000))
+                phys:SetMaterial("blood")
+            end
+
+            SafeRemoveEntityDelayed(piece, math.random(10, 15))
+        end
+    end
+
+    ply:EmitSound("physics/flesh/flesh_bloody_break.wav", 100, math.random(90, 110))
+
+    for _ = 1, 3 do
+        ply:EmitSound(
+            "physics/flesh/flesh_squishy_impact_hard" .. math.random(1, 4) .. ".wav",
+            100, math.random(60, 80))
+    end
+
+    -- DMG_REMOVENORAGDOLL is the point of doing this through damage at all: it
+    -- takes the corpse away, so the pieces are what is left.
+    local damage = DamageInfo()
+    damage:SetDamage(9999)
+    damage:SetAttacker(ply)
+    damage:SetInflictor(game.GetWorld())
+    damage:SetDamageType(bit.bor(DMG_FALL, DMG_ALWAYSGIB, DMG_REMOVENORAGDOLL))
+    ply:TakeDamageInfo(damage)
 end
 
 local function setFlapping(ply, flapping)
