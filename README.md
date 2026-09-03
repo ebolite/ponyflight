@@ -51,5 +51,4 @@ on landing.
 
 ## Credits
 
-The crash gore is lifted from [RAMI'S Drugs [Consumables]](https://steamcommunity.com/sharedfiles/filedetails/?id=3728940551),
-whose expired pre-workout does the same thing to anypony who hits a wall at speed.
+The crash gore is lifted from [RAMI'S Drugs [Consumables]](https://steamcommunity.com/sharedfiles/filedetails/?id=3728940551) because I thought it was cool

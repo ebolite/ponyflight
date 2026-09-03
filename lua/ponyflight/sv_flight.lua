@@ -7,7 +7,7 @@ end
 -- A wall takes the horizontal speed and a landing takes the vertical, so we
 -- watch the horizontal drop to tell a crash from touching down.
 Flight.IMPACT_FLOOR = 250   -- we don't damage below this
-Flight.GIB_SPEED = 640      -- explode, and cruise is 650
+Flight.GIB_SPEED = 600      -- explode, well under the 650 cruise
 Flight.IMPACT_LETHAL = 75   -- damage at GIB_SPEED, which is a pegasus entire
 
 -- What Source already plays when a ragdoll hits the world hard. The engine
@@ -71,7 +71,14 @@ local function gib(ply)
         util.Effect("BloodImpact", effect, true, true)
     end
 
-    util.Decal("Blood", pos, pos - Vector(0, 0, 96))
+    -- The effects burst in place and leave nothing behind, so the mess is put
+    -- on the geometry by hand. Each of these traces out from the pony and marks
+    -- whatever it reaches, which is what puts blood up the wall they hit.
+    util.Decal("Blood", pos, pos - Vector(0, 0, 96), ply)
+
+    for _ = 1, 10 do
+        util.Decal("Blood", pos, pos + VectorRand():GetNormalized() * 220, ply)
+    end
 
     for _, part in ipairs(GIB_PARTS) do
         for _ = 1, part[2] do
