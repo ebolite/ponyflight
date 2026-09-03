@@ -154,9 +154,9 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
 
             if IMPACT_DEBUG:GetBool() then
                 MsgN(string.format(
-                    "[ponyflight] %s  dealt %.0f  health %d -> %d  armor %d -> %d",
+                    "[ponyflight] %s  dealt %.0f  health %d -> %d  armor %d -> %d  god %s",
                     ply:Nick(), dealt, healthBefore, ply:Health(),
-                    armorBefore, ply:Armor()))
+                    armorBefore, ply:Armor(), tostring(ply:HasGodMode())))
             end
         end)
 
@@ -203,3 +203,27 @@ end)
 hook.Add("PonyFlight_ProviderChanged", "PonyFlight.RecheckOnProvider", function()
     Flight.RecheckAll()
 end)
+
+-- Does damage reach this pony at all, outside anything we do? If this prints
+-- no change either, the crash path is not the problem.
+concommand.Add("ponyflight_test_damage", function(ply)
+    if not IsValid(ply) then return end
+
+    local health, armor = ply:Health(), ply:Armor()
+
+    local damage = DamageInfo()
+    damage:SetDamage(25)
+    damage:SetDamageType(DMG_CRUSH)
+    damage:SetAttacker(ply)
+    damage:SetInflictor(game.GetWorld())
+    ply:TakeDamageInfo(damage)
+
+    local viaTakeDamage = ply:Health()
+    ply:TakeDamage(25, ply, game.GetWorld())
+
+    MsgN(string.format(
+        "[ponyflight] test  health %d -> %d (TakeDamageInfo) -> %d (TakeDamage)" ..
+        "  armor %d -> %d  god %s  movetype %d",
+        health, viaTakeDamage, ply:Health(), armor, ply:Armor(),
+        tostring(ply:HasGodMode()), ply:GetMoveType()))
+end, nil, "Apply 25 crush damage to yourself two ways, to see whether damage lands at all")
