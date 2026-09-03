@@ -4,7 +4,8 @@ for _, path in ipairs(Flight.WINGBEATS) do
     resource.AddSingleFile("sound/" .. path)
 end
 
--- We get the impact speed from the difference between our current speed and last tick's speed.
+-- A wall takes the horizontal speed and a landing takes the vertical, so we
+-- watch the horizontal drop to tell a crash from touching down.
 Flight.IMPACT_FLOOR = 320   -- we don't damage below this
 Flight.GIB_SPEED = 900      -- explode
 
@@ -52,6 +53,7 @@ function Flight.Start(ply)
     -- Flight lift acts against it
     ply:SetGravity(1)
     ply.ponyFlightLastSpeed = ply:GetVelocity():Length()
+    ply.ponyFlightLastHorizontal = Vector(ply:GetVelocity().x, ply:GetVelocity().y, 0):Length()
 
     hook.Run("PonyFlight_Changed", ply, true)
 end
@@ -64,6 +66,7 @@ function Flight.Stop(ply, reason)
     setFlapping(ply, false)
     ply:SetGravity(1)
     ply.ponyFlightLastSpeed = nil
+    ply.ponyFlightLastHorizontal = nil
 
     hook.Run("PonyFlight_Changed", ply, false, reason)
 end
@@ -89,19 +92,18 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
         return
     end
 
-    -- Before the impact check: touching down is a landing, not a crash. Gravity
-    -- owns the descent now, so a fall arrives fast enough to read as one
-    if ply:OnGround() then
-        Flight.Stop(ply, "landed")
-        return
-    end
-
     local velocity = mv:GetVelocity()
     local speed = velocity:Length()
-    local previous = ply.ponyFlightLastSpeed or speed
-    ply.ponyFlightLastSpeed = speed
+    local horizontal = Vector(velocity.x, velocity.y, 0):Length()
 
-    local lost = previous - speed
+    local previous = ply.ponyFlightLastSpeed or speed
+    local previousHorizontal = ply.ponyFlightLastHorizontal or horizontal
+    ply.ponyFlightLastSpeed = speed
+    ply.ponyFlightLastHorizontal = horizontal
+
+    -- Horizontal only. Gravity owns the descent now, so a fall arrives fast
+    -- enough that a total-speed drop would read every landing as a crash.
+    local lost = previousHorizontal - horizontal
 
     if lost >= Flight.IMPACT_FLOOR then
         if previous >= Flight.GIB_SPEED then
@@ -116,6 +118,11 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
         end
 
         Flight.Stop(ply, "impact")
+        return
+    end
+
+    if ply:OnGround() then
+        Flight.Stop(ply, "landed")
         return
     end
 
