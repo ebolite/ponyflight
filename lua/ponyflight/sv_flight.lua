@@ -122,15 +122,29 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
     end
 
     if lost >= Flight.IMPACT_FLOOR then
-        if previous >= Flight.GIB_SPEED then
-            gib(ply)
-        else
+        local crashSpeed = previous
+
+        Flight.Stop(ply, "impact")
+
+        -- Next frame, not here. Damage dealt from inside a movement hook does
+        -- not reliably reach the player, and the crash was being detected and
+        -- the flight ended while the pony walked away unhurt.
+        timer.Simple(0, function()
+            if not IsValid(ply) or not ply:Alive() then return end
+
+            if crashSpeed >= Flight.GIB_SPEED then
+                gib(ply)
+                return
+            end
+
+            local dealt = impactDamage(crashSpeed)
+
             local damage = DamageInfo()
-            damage:SetDamage(impactDamage(previous))
+            damage:SetDamage(dealt)
             damage:SetDamageType(DMG_CRUSH)
             damage:SetAttacker(ply)
 
-            -- The world, not the pony. A gamemode that reads the inflictor to
+            -- The world, not the pony. A gamemode reading the inflictor to
             -- classify a swing sees a player holding a weapon otherwise, and
             -- PonyRP's melee pipeline scaled the crash by the tribe multiplier.
             damage:SetInflictor(game.GetWorld())
@@ -141,12 +155,11 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
             if IMPACT_DEBUG:GetBool() then
                 MsgN(string.format(
                     "[ponyflight] %s  dealt %.0f  health %d -> %d  armor %d -> %d",
-                    ply:Nick(), impactDamage(previous), healthBefore, ply:Health(),
+                    ply:Nick(), dealt, healthBefore, ply:Health(),
                     armorBefore, ply:Armor()))
             end
-        end
+        end)
 
-        Flight.Stop(ply, "impact")
         return
     end
 
