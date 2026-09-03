@@ -129,8 +129,21 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
             damage:SetDamage(impactDamage(previous))
             damage:SetDamageType(DMG_CRUSH)
             damage:SetAttacker(ply)
-            damage:SetInflictor(ply)
+
+            -- The world, not the pony. A gamemode that reads the inflictor to
+            -- classify a swing sees a player holding a weapon otherwise, and
+            -- PonyRP's melee pipeline scaled the crash by the tribe multiplier.
+            damage:SetInflictor(game.GetWorld())
+
+            local healthBefore, armorBefore = ply:Health(), ply:Armor()
             ply:TakeDamageInfo(damage)
+
+            if IMPACT_DEBUG:GetBool() then
+                MsgN(string.format(
+                    "[ponyflight] %s  dealt %.0f  health %d -> %d  armor %d -> %d",
+                    ply:Nick(), impactDamage(previous), healthBefore, ply:Health(),
+                    armorBefore, ply:Armor()))
+            end
         end
 
         Flight.Stop(ply, "impact")
