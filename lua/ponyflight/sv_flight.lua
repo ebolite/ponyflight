@@ -6,8 +6,8 @@ end
 
 -- A wall takes the horizontal speed and a landing takes the vertical, so we
 -- watch the horizontal drop to tell a crash from touching down.
-Flight.IMPACT_FLOOR = 320   -- we don't damage below this
-Flight.GIB_SPEED = 675      -- explode
+Flight.IMPACT_FLOOR = 250   -- we don't damage below this
+Flight.GIB_SPEED = 640      -- explode, and cruise is 650
 Flight.IMPACT_LETHAL = 75   -- damage at GIB_SPEED, which is a pegasus entire
 
 -- What Source already plays when a ragdoll hits the world hard. The engine
