@@ -126,9 +126,18 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
                 return
             end
 
-            -- TakeDamage rather than a DamageInfo. DPP2's antipropkill zeroes
-            -- any DMG_CRUSH aimed at a player, so a typed one never arrived.
-            ply:TakeDamage(impactDamage(crashSpeed), ply, game.GetWorld())
+            -- DMG_FALL, for the grunt: the engine picks the pain sound off the
+            -- damage type and DMG_GENERIC has none. Not DMG_CRUSH, which is
+            -- what this wants to be -- DPP2's antipropkill zeroes any of that
+            -- aimed at a player, and PonyRP reads it as a melee swing.
+            local damage = DamageInfo()
+            damage:SetDamage(impactDamage(crashSpeed))
+            damage:SetDamageType(DMG_FALL)
+            damage:SetAttacker(ply)
+            damage:SetInflictor(game.GetWorld())
+            damage:SetDamagePosition(ply:WorldSpaceCenter())
+
+            ply:TakeDamageInfo(damage)
         end)
     end
 
