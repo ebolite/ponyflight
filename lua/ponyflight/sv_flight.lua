@@ -7,15 +7,19 @@ end
 -- A wall takes the horizontal speed and a landing takes the vertical, so we
 -- watch the horizontal drop to tell a crash from touching down.
 Flight.IMPACT_FLOOR = 320   -- we don't damage below this
-Flight.GIB_SPEED = 900      -- explode
+Flight.GIB_SPEED = 700      -- explode
+Flight.IMPACT_LETHAL = 75   -- damage at GIB_SPEED, which is a pegasus entire
 
 local IMPACT_DEBUG = CreateConVar("ponyflight_debug_impact", "0", FCVAR_NOTIFY,
     "Print what each flight lost when it ended, to find why a crash did not register")
 
+-- Ramps from nothing at the floor to lethal at the gib speed, and quadratic so
+-- a scrape stays cheap while the top of the range does not.
 local function impactDamage(speed)
-    -- Damage is quadratic so low speed collisions don't destroy you
-    local over = (speed - Flight.IMPACT_FLOOR) / 100
-    return math.Clamp(over * over * 4, 1, 200)
+    local range = Flight.GIB_SPEED - Flight.IMPACT_FLOOR
+    local progress = math.Clamp((speed - Flight.IMPACT_FLOOR) / range, 0, 1)
+
+    return math.Clamp(progress * progress * Flight.IMPACT_LETHAL, 1, 200)
 end
 
 local function gib(ply)
