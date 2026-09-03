@@ -58,7 +58,7 @@ local GIB_PARTS = {
     { "models/gibs/HGIBS_rib.mdl", 6 },
 }
 
-local function gib(ply)
+local function gib(ply, heading)
     local pos = ply:WorldSpaceCenter()
 
     for _ = 1, 6 do
@@ -76,8 +76,15 @@ local function gib(ply)
     -- whatever it reaches, which is what puts blood up the wall they hit.
     util.Decal("Blood", pos, pos - Vector(0, 0, 96), ply)
 
+    -- Into the half sphere the pony was travelling into, so the wall they hit
+    -- takes the blood and the empty air behind them does not. Mirroring a
+    -- random direction against the heading is enough to stay on that side.
     for _ = 1, 10 do
-        util.Decal("Blood", pos, pos + VectorRand():GetNormalized() * 220, ply)
+        local dir = VectorRand():GetNormalized()
+
+        if dir:Dot(heading) < 0 then dir = -dir end
+
+        util.Decal("Blood", pos, pos + dir * 220, ply)
     end
 
     for _, part in ipairs(GIB_PARTS) do
@@ -141,6 +148,7 @@ function Flight.Start(ply)
     ply:SetGravity(1)
     ply.ponyFlightLastSpeed = ply:GetVelocity():Length()
     ply.ponyFlightLastHorizontal = Vector(ply:GetVelocity().x, ply:GetVelocity().y, 0):Length()
+    ply.ponyFlightLastVelocity = ply:GetVelocity()
 
     hook.Run("PonyFlight_Changed", ply, true)
 end
@@ -154,6 +162,7 @@ function Flight.Stop(ply, reason)
     ply:SetGravity(1)
     ply.ponyFlightLastSpeed = nil
     ply.ponyFlightLastHorizontal = nil
+    ply.ponyFlightLastVelocity = nil
 
     hook.Run("PonyFlight_Changed", ply, false, reason)
 end
@@ -185,8 +194,10 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
 
     local previous = ply.ponyFlightLastSpeed or speed
     local previousHorizontal = ply.ponyFlightLastHorizontal or horizontal
+    local previousVelocity = ply.ponyFlightLastVelocity or velocity
     ply.ponyFlightLastSpeed = speed
     ply.ponyFlightLastHorizontal = horizontal
+    ply.ponyFlightLastVelocity = Vector(velocity)
 
     -- Horizontal only. Gravity owns the descent now, so a fall arrives fast
     -- enough that a total-speed drop would read every landing as a crash.
@@ -198,6 +209,7 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
     -- the same wall twice.
     if lost >= Flight.IMPACT_FLOOR then
         local crashSpeed = previous
+        local crashHeading = previousVelocity:GetNormalized()
 
         -- Measured here, dealt next frame. Damage from inside a movement hook
         -- is not reliable, and we never confirmed it works from one.
@@ -205,7 +217,7 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
             if not IsValid(ply) or not ply:Alive() then return end
 
             if crashSpeed >= Flight.GIB_SPEED then
-                gib(ply)
+                gib(ply, crashHeading)
                 return
             end
 
