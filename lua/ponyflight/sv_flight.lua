@@ -51,6 +51,30 @@ end
 -- origin is the pony's centre rather than 45 units up, since a pony is shorter
 -- than the player it was written for, and the damage type is not DMG_CRUSH --
 -- DPP2's antipropkill zeroes that for players and strips the flags with it.
+-- A piece has to be moving to leave anything, and only marks a few times, so
+-- ten of them settling in a corner cannot bury the map in decals.
+local GIB_MARK_SPEED = 80
+local GIB_MARK_LIMIT = 3
+
+-- Bounces are reported from the physics thread, where making things is not
+-- allowed, so the mark waits for the next frame.
+local function markOnBounce(piece, data)
+    if piece.PonyFlightMarks >= GIB_MARK_LIMIT then return end
+    if data.Speed < GIB_MARK_SPEED then return end
+
+    local heading = data.OurOldVelocity
+    if not heading or heading:LengthSqr() < 1 then return end
+
+    piece.PonyFlightMarks = piece.PonyFlightMarks + 1
+
+    local hit = data.HitPos
+    local dir = heading:GetNormalized()
+
+    timer.Simple(0, function()
+        util.Decal("Blood", hit - dir * 12, hit + dir * 12)
+    end)
+end
+
 local GIB_PARTS = {
     { "models/gibs/HGIBS.mdl", 1 },
     { "models/gibs/HGIBS_spine.mdl", 1 },
@@ -102,6 +126,9 @@ local function gib(ply, heading)
                 phys:ApplyForceCenter(VectorRand(-1, 1):GetNormalized() * math.random(3000, 8000))
                 phys:SetMaterial("blood")
             end
+
+            piece.PonyFlightMarks = 0
+            piece:AddCallback("PhysicsCollide", markOnBounce)
 
             SafeRemoveEntityDelayed(piece, math.random(10, 15))
         end
