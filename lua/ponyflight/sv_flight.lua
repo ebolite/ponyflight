@@ -204,26 +204,42 @@ hook.Add("PonyFlight_ProviderChanged", "PonyFlight.RecheckOnProvider", function(
     Flight.RecheckAll()
 end)
 
--- Does damage reach this pony at all, outside anything we do? If this prints
--- no change either, the crash path is not the problem.
+-- Which damage types actually land on this pony. TakeDamageInfo with
+-- DMG_CRUSH did nothing while TakeDamage worked, so something is filtering
+-- on the type rather than on the call.
+local TEST_TYPES = {
+    { "DMG_GENERIC", DMG_GENERIC },
+    { "DMG_CRUSH",   DMG_CRUSH },
+    { "DMG_FALL",    DMG_FALL },
+    { "DMG_SLASH",   DMG_SLASH },
+    { "DMG_CLUB",    DMG_CLUB },
+    { "DMG_DIRECT",  DMG_DIRECT },
+}
+
 concommand.Add("ponyflight_test_damage", function(ply)
     if not IsValid(ply) then return end
 
-    local health, armor = ply:Health(), ply:Armor()
+    MsgN("[ponyflight] damage type sweep, 5 each")
 
-    local damage = DamageInfo()
-    damage:SetDamage(25)
-    damage:SetDamageType(DMG_CRUSH)
-    damage:SetAttacker(ply)
-    damage:SetInflictor(game.GetWorld())
-    ply:TakeDamageInfo(damage)
+    for _, entry in ipairs(TEST_TYPES) do
+        local before = ply:Health()
 
-    local viaTakeDamage = ply:Health()
-    ply:TakeDamage(25, ply, game.GetWorld())
+        local damage = DamageInfo()
+        damage:SetDamage(5)
+        damage:SetDamageType(entry[2])
+        damage:SetAttacker(ply)
+        damage:SetInflictor(game.GetWorld())
+        damage:SetDamagePosition(ply:WorldSpaceCenter())
+        ply:TakeDamageInfo(damage)
 
-    MsgN(string.format(
-        "[ponyflight] test  health %d -> %d (TakeDamageInfo) -> %d (TakeDamage)" ..
-        "  armor %d -> %d  god %s  movetype %d",
-        health, viaTakeDamage, ply:Health(), armor, ply:Armor(),
-        tostring(ply:HasGodMode()), ply:GetMoveType()))
-end, nil, "Apply 25 crush damage to yourself two ways, to see whether damage lands at all")
+        MsgN(string.format("    %-12s %3d -> %3d  %s",
+            entry[1], before, ply:Health(),
+            ply:Health() < before and "landed" or "BLOCKED"))
+    end
+
+    local before = ply:Health()
+    ply:TakeDamage(5, ply, game.GetWorld())
+    MsgN(string.format("    %-12s %3d -> %3d  %s  (control)",
+        "TakeDamage", before, ply:Health(),
+        ply:Health() < before and "landed" or "BLOCKED"))
+end, nil, "Deal 5 damage of each type, to see which ones this server lets through")
