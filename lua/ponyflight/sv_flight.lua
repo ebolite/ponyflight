@@ -9,6 +9,9 @@ end
 Flight.IMPACT_FLOOR = 320   -- we don't damage below this
 Flight.GIB_SPEED = 900      -- explode
 
+local IMPACT_DEBUG = CreateConVar("ponyflight_debug_impact", "0", FCVAR_NOTIFY,
+    "Print what each flight lost when it ended, to find why a crash did not register")
+
 local function impactDamage(speed)
     -- Damage is quadratic so low speed collisions don't destroy you
     local over = (speed - Flight.IMPACT_FLOOR) / 100
@@ -67,6 +70,7 @@ function Flight.Stop(ply, reason)
     ply:SetGravity(1)
     ply.ponyFlightLastSpeed = nil
     ply.ponyFlightLastHorizontal = nil
+    ply.ponyFlightLastDescent = nil
 
     hook.Run("PonyFlight_Changed", ply, false, reason)
 end
@@ -105,6 +109,18 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
     -- enough that a total-speed drop would read every landing as a crash.
     local lost = previousHorizontal - horizontal
 
+    -- Descent is only measured for the readout; nothing decides on it yet
+    local descent = math.max(-velocity.z, 0)
+    local previousDescent = ply.ponyFlightLastDescent or descent
+    ply.ponyFlightLastDescent = descent
+
+    if IMPACT_DEBUG:GetBool() and (lost > 60 or previousDescent - descent > 60) then
+        MsgN(string.format(
+            "[ponyflight] %s  total %.0f  horizontal lost %.0f  descent lost %.0f  floor %d%s",
+            ply:Nick(), previous, lost, previousDescent - descent, Flight.IMPACT_FLOOR,
+            lost >= Flight.IMPACT_FLOOR and "  <- CRASH" or ""))
+    end
+
     if lost >= Flight.IMPACT_FLOOR then
         if previous >= Flight.GIB_SPEED then
             gib(ply)
@@ -122,6 +138,11 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
     end
 
     if ply:OnGround() then
+        if IMPACT_DEBUG:GetBool() then
+            MsgN(string.format("[ponyflight] %s  landed  total %.0f  horizontal lost %.0f",
+                ply:Nick(), previous, lost))
+        end
+
         Flight.Stop(ply, "landed")
         return
     end
