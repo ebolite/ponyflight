@@ -51,6 +51,13 @@ end
 -- origin is the pony's centre rather than 45 units up, since a pony is shorter
 -- than the player it was written for, and the damage type is not DMG_CRUSH --
 -- DPP2's antipropkill zeroes that for players and strips the flags with it.
+-- Server side rather than a client preference: the pieces and the decals are
+-- entities everypony sees, so there is no half of this a single player can
+-- turn off for themselves.
+local ENABLE_GORE = CreateConVar("ponyflight_enablegore", "1",
+    bit.bor(FCVAR_ARCHIVE, FCVAR_NOTIFY),
+    "Blood and gore on a fatal crash. 0 kills the pony and leaves them whole.")
+
 -- A piece has to be moving to leave anything, and only marks a few times, so
 -- ten of them settling in a corner cannot bury the map in decals.
 local GIB_MARK_SPEED = 80
@@ -82,7 +89,15 @@ local GIB_PARTS = {
     { "models/gibs/HGIBS_rib.mdl", 6 },
 }
 
-local function gib(ply, heading)
+local function gib(ply, heading, speed)
+    -- Still fatal without the mess: an ordinary death, and a pony left in one
+    -- piece to ragdoll like any other.
+    if not ENABLE_GORE:GetBool() then
+        impactSound(ply, speed)
+        ply:Kill()
+        return
+    end
+
     local pos = ply:WorldSpaceCenter()
 
     for _ = 1, 6 do
@@ -244,7 +259,7 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
             if not IsValid(ply) or not ply:Alive() then return end
 
             if crashSpeed >= Flight.GIB_SPEED then
-                gib(ply, crashHeading)
+                gib(ply, crashHeading, crashSpeed)
                 return
             end
 

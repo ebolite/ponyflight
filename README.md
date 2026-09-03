@@ -36,6 +36,7 @@ If CanFly changes mid-flight, call `PonyFlight.Recheck(ply)`.
 | --- | --- | --- | --- |
 | `ponyflight_enterthirdperson` | client | `1` | Switch to third person while flying |
 | `ponyflight_forcethirdperson` | server, replicated | `0` | Force third person while flying, and hold players in it |
+| `ponyflight_enablegore` | server | `1` | Blood and gore on a fatal crash. `0` kills the pony and leaves them whole |
 
 With Simple ThirdPerson installed we switch its view on rather than running our
 own camera, so the player keeps the distance and smoothing they already tuned.
