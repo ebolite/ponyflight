@@ -10,13 +10,40 @@ Flight.IMPACT_FLOOR = 320   -- we don't damage below this
 Flight.GIB_SPEED = 700      -- explode
 Flight.IMPACT_LETHAL = 75   -- damage at GIB_SPEED, which is a pegasus entire
 
--- Ramps from nothing at the floor to lethal at the gib speed, and quadratic so
--- a scrape stays cheap while the top of the range does not.
-local function impactDamage(speed)
-    local range = Flight.GIB_SPEED - Flight.IMPACT_FLOOR
-    local progress = math.Clamp((speed - Flight.IMPACT_FLOOR) / range, 0, 1)
+-- What Source already plays when a ragdoll hits the world hard. The engine
+-- gives players no pain sound of their own in multiplayer, whatever damage
+-- type it is handed, so the crash has to make its own noise.
+Flight.IMPACT_SOUNDS = {
+    "physics/body/body_medium_impact_hard1.wav",
+    "physics/body/body_medium_impact_hard2.wav",
+    "physics/body/body_medium_impact_hard3.wav",
+    "physics/body/body_medium_impact_hard4.wav",
+    "physics/body/body_medium_impact_hard5.wav",
+    "physics/body/body_medium_impact_hard6.wav",
+}
 
+-- How bad the crash was, 0 at the floor and 1 at the gib speed. The damage and
+-- the sound both read it, so a scrape sounds like one.
+local function crashProgress(speed)
+    local range = Flight.GIB_SPEED - Flight.IMPACT_FLOOR
+    return math.Clamp((speed - Flight.IMPACT_FLOOR) / range, 0, 1)
+end
+
+-- Quadratic, so a scrape stays cheap while the top of the range does not.
+local function impactDamage(speed)
+    local progress = crashProgress(speed)
     return math.Clamp(progress * progress * Flight.IMPACT_LETHAL, 1, 200)
+end
+
+local function impactSound(ply, speed)
+    local progress = crashProgress(speed)
+
+    ply:EmitSound(
+        Flight.IMPACT_SOUNDS[math.random(#Flight.IMPACT_SOUNDS)],
+        75,
+        math.random(95, 105) - progress * 15,   -- heavier lands lower
+        0.55 + progress * 0.45,
+        CHAN_BODY)
 end
 
 local function gib(ply)
@@ -125,6 +152,8 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
                 gib(ply)
                 return
             end
+
+            impactSound(ply, crashSpeed)
 
             -- DMG_FALL, for the grunt: the engine picks the pain sound off the
             -- damage type and DMG_GENERIC has none. Not DMG_CRUSH, which is
