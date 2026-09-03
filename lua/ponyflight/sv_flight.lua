@@ -10,9 +10,6 @@ Flight.IMPACT_FLOOR = 320   -- we don't damage below this
 Flight.GIB_SPEED = 700      -- explode
 Flight.IMPACT_LETHAL = 75   -- damage at GIB_SPEED, which is a pegasus entire
 
-local IMPACT_DEBUG = CreateConVar("ponyflight_debug_impact", "0", FCVAR_NOTIFY,
-    "Print what each flight lost when it ended, to find why a crash did not register")
-
 -- Ramps from nothing at the floor to lethal at the gib speed, and quadratic so
 -- a scrape stays cheap while the top of the range does not.
 local function impactDamage(speed)
@@ -74,7 +71,6 @@ function Flight.Stop(ply, reason)
     ply:SetGravity(1)
     ply.ponyFlightLastSpeed = nil
     ply.ponyFlightLastHorizontal = nil
-    ply.ponyFlightLastDescent = nil
 
     hook.Run("PonyFlight_Changed", ply, false, reason)
 end
@@ -113,22 +109,12 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
     -- enough that a total-speed drop would read every landing as a crash.
     local lost = previousHorizontal - horizontal
 
-    -- Descent is only measured for the readout; nothing decides on it yet
-    local descent = math.max(-velocity.z, 0)
-    local previousDescent = ply.ponyFlightLastDescent or descent
-    ply.ponyFlightLastDescent = descent
-
-    if IMPACT_DEBUG:GetBool() and (lost > 60 or previousDescent - descent > 60) then
-        MsgN(string.format(
-            "[ponyflight] %s  total %.0f  horizontal lost %.0f  descent lost %.0f  floor %d%s",
-            ply:Nick(), previous, lost, previousDescent - descent, Flight.IMPACT_FLOOR,
-            lost >= Flight.IMPACT_FLOOR and "  <- CRASH" or ""))
-    end
-
+    -- The crash does not end the flight. A pony who keeps their wings after
+    -- hitting something has to pull out of it, which reads better than being
+    -- dropped, and rebuilding horizontal speed is its own cooldown on hitting
+    -- the same wall twice.
     if lost >= Flight.IMPACT_FLOOR then
         local crashSpeed = previous
-
-        Flight.Stop(ply, "impact")
 
         -- Measured here, dealt next frame. Damage from inside a movement hook
         -- is not reliable, and we never confirmed it works from one.
@@ -140,30 +126,13 @@ hook.Add("FinishMove", "PonyFlight.Upkeep", function(ply, mv)
                 return
             end
 
-            local dealt = impactDamage(crashSpeed)
-            local before = ply:Health()
-
-            -- TakeDamage rather than a DamageInfo. One carrying DMG_CRUSH was
-            -- dropped before it reached the pony, and the generic type also
-            -- keeps a gamemode from reading the crash as a melee swing.
-            ply:TakeDamage(dealt, ply, game.GetWorld())
-
-            if IMPACT_DEBUG:GetBool() then
-                MsgN(string.format(
-                    "[ponyflight] %s crashed at %.0f  dealt %.0f  health %d -> %d",
-                    ply:Nick(), crashSpeed, dealt, before, ply:Health()))
-            end
+            -- TakeDamage rather than a DamageInfo. DPP2's antipropkill zeroes
+            -- any DMG_CRUSH aimed at a player, so a typed one never arrived.
+            ply:TakeDamage(impactDamage(crashSpeed), ply, game.GetWorld())
         end)
-
-        return
     end
 
     if ply:OnGround() then
-        if IMPACT_DEBUG:GetBool() then
-            MsgN(string.format("[ponyflight] %s  landed  total %.0f  horizontal lost %.0f",
-                ply:Nick(), previous, lost))
-        end
-
         Flight.Stop(ply, "landed")
         return
     end
