@@ -135,6 +135,9 @@ local PREDICTION_TIMEOUT = 0.5
 local predictedAt = nil
 local predictedFlying = false
 
+-- The frame we were first seen off the ground, nil while standing
+local airborneSince = nil
+
 local function predictFlying(flying)
     if not IsValid(LocalPlayer()) then return end
 
@@ -253,7 +256,10 @@ hook.Add("KeyPress", "PonyFlight.PredictTakeoff", function(ply, key)
     if Flight.IsFlying(ply) or (predictedAt and predictedFlying) then return end
     if not Flight.CanFly(ply) then return end
 
-    if not ply:OnGround() then
+    -- OnGround is already false on the jump press itself in singleplayer, where
+    -- nothing is predicted and the move has run by the time we get here. Ask
+    -- whether we were airborne before this press instead.
+    if airborneSince and FrameNumber() > airborneSince then
         predictFlying(true)
     end
 end)
@@ -314,21 +320,21 @@ local function clearLean(ply)
 end
 
 local wasFlying = false
-local wasOnGround = false
 
 hook.Add("Think", "PonyFlight.Presentation", function()
     local localPly = LocalPlayer()
 
     if IsValid(localPly) then
-        local flying = Flight.IsFlying(localPly)
+        if localPly:OnGround() then
+            if airborneSince and
+                    (Flight.IsFlying(localPly) or (predictedAt and predictedFlying)) then
+                predictFlying(false)
+            end
 
-        local onGround = localPly:OnGround()
-
-        if onGround and not wasOnGround and (flying or (predictedAt and predictedFlying)) then
-            predictFlying(false)
+            airborneSince = nil
+        elseif not airborneSince then
+            airborneSince = FrameNumber()
         end
-
-        wasOnGround = onGround
 
         local shown = wingsWanted(localPly)
 
