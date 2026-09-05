@@ -209,16 +209,11 @@ function Flight.Stop(ply, reason)
     hook.Run("PonyFlight_Changed", ply, false, reason)
 end
 
-hook.Add("KeyPress", "PonyFlight.Takeoff", function(ply, key)
-    if key ~= IN_JUMP then return end
-    if Flight.IsFlying(ply) then return end
-    if not Flight.CanFly(ply) then return end
-
-    -- One press, as long as we are already airborne. Jumping still costs the
-    -- press that leaves the ground, so a standing takeoff is jump then fly
-    if not ply:OnGround() then
-        Flight.Start(ply)
-    end
+hook.Remove("KeyPress", "PonyFlight.Takeoff")
+hook.Add("SetupMove", "PonyFlight.Takeoff", function(ply, mv)
+    -- Check before movement so the ground jump cannot count as takeoff
+    if not mv:KeyPressed(IN_JUMP) or ply:OnGround() then return end
+    Flight.Start(ply)
 end)
 
 -- FinishMove runs once per processed move, so we hook there instead of Think

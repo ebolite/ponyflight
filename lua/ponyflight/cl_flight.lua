@@ -135,9 +135,6 @@ local PREDICTION_TIMEOUT = 0.5
 local predictedAt = nil
 local predictedFlying = false
 
--- The frame we were first seen off the ground, nil while standing
-local airborneSince = nil
-
 local function predictFlying(flying)
     if not IsValid(LocalPlayer()) then return end
 
@@ -248,20 +245,22 @@ local function enforceWings(ply)
     return flying, wanted
 end
 
--- Predicts the same single airborne press sv_flight.lua takes off on
-hook.Add("KeyPress", "PonyFlight.PredictTakeoff", function(ply, key)
+hook.Remove("KeyPress", "PonyFlight.PredictTakeoff")
+hook.Add("SetupMove", "PonyFlight.PredictTakeoff", function(ply, mv)
     if ply ~= LocalPlayer() then return end
-    if key ~= IN_JUMP then return end
+    -- Match the server's ground state before this command moves the player
+    if not mv:KeyPressed(IN_JUMP) or ply:OnGround() then return end
     -- Only an active prediction blocks a new one
     if Flight.IsFlying(ply) or (predictedAt and predictedFlying) then return end
     if not Flight.CanFly(ply) then return end
 
-    -- OnGround is already false on the jump press itself in singleplayer, where
-    -- nothing is predicted and the move has run by the time we get here. Ask
-    -- whether we were airborne before this press instead.
-    if airborneSince and FrameNumber() > airborneSince then
-        predictFlying(true)
-    end
+    predictFlying(true)
+end)
+
+hook.Add("FinishMove", "PonyFlight.PredictLanding", function(ply)
+    if ply ~= LocalPlayer() then return end
+    -- A bunnyhop can touch down and jump again between rendered frames
+    if ply:OnGround() and wingsWanted(ply) then predictFlying(false) end
 end)
 
 local function updateLean(ply, flapping)
@@ -325,17 +324,6 @@ hook.Add("Think", "PonyFlight.Presentation", function()
     local localPly = LocalPlayer()
 
     if IsValid(localPly) then
-        if localPly:OnGround() then
-            if airborneSince and
-                    (Flight.IsFlying(localPly) or (predictedAt and predictedFlying)) then
-                predictFlying(false)
-            end
-
-            airborneSince = nil
-        elseif not airborneSince then
-            airborneSince = FrameNumber()
-        end
-
         local shown = wingsWanted(localPly)
 
         if shown ~= wasFlying then
